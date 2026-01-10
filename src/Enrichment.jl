@@ -1,17 +1,9 @@
 function getIntervalCollection(annotbed::DataFrame)
-    if size(annotbed)[2] == 5
-        annotbed = rename(annotbed, 1 => :Chromosome, 2 => :Start, 3 => :End, 4 => :Name, 5 => :Score)
+        ncol = size(annotbed,2)
+        annotbed = rename(annotbed, [:Chromosome, :Start, :End, :Name, Symbol.(string.("Score", 1:(ncol-4)))...])
         annotbed = Tables.rowtable(annotbed)
         result = GenomicIntervalCollection([GenomicInterval(qy.Chromosome, qy.Start, qy.End, '?', qy.Name) for qy in annotbed], true)
         return result
-    elseif size(annotbed)[2] == 4
-        annotbed = rename(annotbed, 1 => :Chromosome, 2 => :Start, 3 => :End, 4 => :Name)
-        annotbed = Tables.rowtable(annotbed)
-        result = GenomicIntervalCollection([GenomicInterval(qy.Chromosome, qy.Start, qy.End, '?', qy.Name) for qy in annotbed], true)
-        return result
-    else
-        println("please confirm your bed files")
-    end
 end
 function getIntervalCollection(fs::String)
     annotbed = CSV.File(fs, delim="\t", header=0) |> DataFrame
@@ -58,7 +50,7 @@ function read_cis_file(cis_file::String; threshold::Union{Nothing,Float64}=nothi
     return df_tops
 end
 function read_bkg_bim(bkg_plink_prefix::String; calcu_maf::Bool=true)
-    bkg_bim = CSV.read(string(bkg_plink_prefix, ".bim"), DataFrame, header=false, select=[:1, :2, :4], types=[String, String, Int, Int, String1, String1], buffer_in_memory=true)
+    bkg_bim = CSV.read(string(bkg_plink_prefix, ".bim"), DataFrame, header=false, select=[:1, :2, :4], types=[String, String, Int, Int, String1, String1], buffer_in_memory=!_args_low_mem)
     rename!(bkg_bim, :1 => :chr, :2 => :variant_id, :3 => :pos)
     if calcu_maf
         bkg_bim.maf = get_allele_maf(bkg_plink_prefix)
@@ -74,7 +66,12 @@ function add_chr_pos_to_cis_tops(target_data::DataFrame, bkg_data::DataFrame)
     cis_tops_bed.start = cis_tops_bed.start |> Vector{Int}
     cis_tops_bed.end = cis_tops_bed.end |> Vector{Int}
     cis_tops_bed.maf = cis_tops_bed.maf |> Vector{Float64}
-    return cis_tops_bed[:,["chr","start","end","variant_id","maf"]]
+    if size(bkg_data,2) == 5
+        return cis_tops_bed[:,["chr","start","end","variant_id","maf"]]
+    elseif size(bkg_data,2) == 6
+        cis_tops_bed.ldscore = cis_tops_bed.ldscore |> Vector{Float64}
+        return cis_tops_bed[:,["chr","start","end","variant_id","maf","ldscore"]]
+    end
 end
 function get_bkg_maf_match!(bkg_perm_df::DataFrame, unique_mafs::Vector{Float64}, freq_mafs::Vector{Int}, bkg_data_sorted::DataFrame, maf_match::Float64)
     n_mafs = length(unique_mafs)
@@ -93,6 +90,39 @@ function get_bkg_maf_match!(bkg_perm_df::DataFrame, unique_mafs::Vector{Float64}
     end
     bkg_perm_df .= bkg_data_sorted[sort(selected_indices), 1:4]
 end
+function get_bkg_maf_ld_match!(bkg_perm_df::DataFrame, unique_mafs::Vector{Float64}, freq_mafs::Vector{Int}, bkg_data_sorted::DataFrame, maf_match::Float64; target_data::Union{Nothing,DataFrame}=nothing,ld_match::Union{Nothing,Float64}=nothing)
+    n_mafs = length(unique_mafs)
+    n_target = sum(freq_mafs)
+    selected_indices = zeros(Int, n_target)
+    j1 = 1
+    j2 = 0
+    @runif !isnothing(ld_match) target_ldscore_std = std(target_data.ldscore) * ld_match
+    for i in 1:n_mafs
+        low = unique_mafs[i] - maf_match
+        high = unique_mafs[i] + maf_match
+        range_low = searchsortedfirst(bkg_data_sorted.maf, low)
+        range_high = searchsortedlast(bkg_data_sorted.maf, high)
+        j2 += freq_mafs[i]
+        if isnothing(ld_match)
+            selected_indices[j1:j2] .= sample(range_low:range_high, freq_mafs[i]; replace=true, ordered=false)
+        else
+            target_ldscore = sort(target_data.ldscore[target_data.maf .== unique_mafs[i]])
+            ld_match_indices = zeros(freq_mafs[i])
+            range_low_high = range_low:range_high
+            bkg_data_sorted_ldscore_subset = bkg_data_sorted.ldscore[range_low_high]
+            for lds_i in eachindex(target_ldscore)
+                lds = target_ldscore[lds_i]
+                lds_low = lds - target_ldscore_std
+                lds_high = lds + target_ldscore_std
+                range_subset_ld_match = range_low_high[lds_low .<= bkg_data_sorted_ldscore_subset .<= lds_high]
+                ld_match_indices[lds_i] = sample(range_subset_ld_match) 
+            end
+            selected_indices[j1:j2] .= ld_match_indices
+        end
+        j1 = j2 + 1
+    end
+    bkg_perm_df .= bkg_data_sorted[sort(selected_indices), 1:4]
+end
 function read_annot_bed(annot_file_list::String)
     chromatin_category_data = CSV.read(annot_file_list, DataFrame, header = false)
     rename!(chromatin_category_data, 1 => :chr, 2 => :start, 3 => :end, 4 => :category)
@@ -107,45 +137,62 @@ function enrichment_permutation(
     annotation_IC::Vector{GenomicIntervalCollection},
     annot_file_list::Union{Tuple{String}, Vector{String}};
     maf_match::Union{Float64, Nothing}=nothing,
+    ld_match::Union{Float64, Nothing}=nothing,
     use_region::Bool=false
     )
-    nthreads = Threads.nthreads()
     if use_region
         maf_match = nothing
     else
         if !isnothing(maf_match)
             target_data_maf_match = sort(target_data, :maf)
-            bkg_data_sorted = sort(bkg_data, :maf)
+            if isnothing(ld_match)
+                bkg_data_sorted = sort(bkg_data, :maf)
+            else
+                bkg_data_sorted = sort(bkg_data, [:maf, :ldscore])
+            end
             unique_mafs = unique(target_data_maf_match.maf)
             freq_mafs = [count(x -> x == val, target_data_maf_match.maf) for val in unique_mafs]
+        end
+        if !isnothing(ld_match) && isnothing(maf_match)
+            maf_match = 0.02
+            println_to_file(" * The '--ld-match' option was used without specifying '--maf-match'. The '--maf-match' parameter has been set to 0.02.", log_file)
         end
     end
     n_rows_target = size(target_data, 1)
     random_result_permutation = Vector{DataFrame}(undef, n_perms)
-    thread_local_storage = [(DataFrame([Vector{eltype(col)}(undef, n_rows_target) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))) for _ in 1:nthreads]
-    Threads.@threads for ra in 1:n_perms
-        tid = Threads.threadid()
+    thread_local_storage = [(DataFrame([Vector{eltype(col)}(undef, n_rows_target) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))) for _ in 1:nthreads()]
+    block_size = ceil(Int, n_perms / nthreads())
+    iter_collects = collect(Iterators.partition(1:n_perms, block_size))
+    @threads for blocki in eachindex(iter_collects) 
+        tid = blocki
         bkg_perm_df = thread_local_storage[tid]
-        if !isnothing(maf_match) 
-            get_bkg_maf_match!(bkg_perm_df, unique_mafs, freq_mafs, bkg_data_sorted, maf_match)
-        else
-            rng = Random.MersenneTwister(ra) 
-            random_idx = rand(rng, 1:size(bkg_data, 1), n_rows_target)
-            bkg_perm_df .= bkg_data[random_idx, 1:4]
-            if use_region
-                bkg_perm_df.end .= bkg_perm_df.end .+ target_data.len .- 1
+        for ra in iter_collects[blocki]
+            if !isnothing(maf_match) 
+                if isnothing(ld_match)
+                    get_bkg_maf_match!(bkg_perm_df, unique_mafs, freq_mafs, bkg_data_sorted, maf_match)
+                else
+                    get_bkg_maf_ld_match!(bkg_perm_df, unique_mafs, freq_mafs, bkg_data_sorted, maf_match; target_data=target_data, ld_match=ld_match)
+                end
+            else
+                rng = Random.MersenneTwister(ra) 
+                random_idx = rand(rng, 1:size(bkg_data, 1), n_rows_target)
+                bkg_perm_df .= bkg_data[random_idx, 1:4]
+                if use_region
+                    bkg_perm_df.end .= bkg_perm_df.end .+ target_data.len .- 1
+                end
             end
+            bkg_IC = getIntervalCollection(bkg_perm_df)
+            bkg_overlap_results = DataFrame()
+            for i in eachindex(annot_file_list)
+                overlap_res = getInterval(bkg_IC, annotation_IC[i]; only_meta=["B"])
+                overlap_res.bed_file .= basename(annot_file_list[i])
+                append!(bkg_overlap_results, overlap_res)
+            end
+            bkg_overlap_results = DataFrames.combine(groupby(bkg_overlap_results, [:metadata_B, :bed_file]), nrow => :count)
+            bkg_overlap_results.prop = bkg_overlap_results.count ./ n_rows_target
+            random_result_permutation[ra] = bkg_overlap_results
+            println_to_file("    Permutated $(ra)/$(n_perms).", log_file)
         end
-        bkg_IC = getIntervalCollection(bkg_perm_df)
-        bkg_overlap_results = DataFrame()
-        for i in 1:length(annot_file_list)
-            overlap_res = getInterval(bkg_IC, annotation_IC[i]; only_meta=["B"])
-            overlap_res.bed_file .= basename(annot_file_list[i])
-            append!(bkg_overlap_results,overlap_res)
-        end
-        bkg_overlap_results = DataFrames.combine(groupby(bkg_overlap_results, [:metadata_B, :bed_file]), nrow => :count)
-        bkg_overlap_results.prop = bkg_overlap_results.count ./ n_rows_target
-        random_result_permutation[ra] = bkg_overlap_results
     end
     return random_result_permutation
 end
@@ -172,14 +219,15 @@ function calcu_enrichment_p(target_overlap_result::DataFrame, permuted_results::
 end
 function runOmiGA_enrich(
     target_file::String,
-    bkg_plink_prefix::String,
     annot_file_list::Union{Tuple{String}, Vector{String}};
+    bkg_plink_prefix::Union{Nothing, String}=nothing,
+    ldscore_file::Union{Nothing, String}=nothing,
     maf_match::Union{Nothing, Float64}=nothing,
+    ld_match::Union{Nothing, Float64}=nothing,
     threshold::Union{Nothing, Float64}=nothing,
     n_perms::Int=1000,
     )
-    println("Performing enrichment analysis...")
-    println("Loading and dealing with target dataset...")
+    println_to_file("Loading and dealing with target dataset...", log_file)
     use_region = false
     target_file_format = "bed"
     @timeit to "Load target" if endswith(target_file, r"bed|bed.gz")
@@ -196,21 +244,33 @@ function runOmiGA_enrich(
         target_file_format = "omiga"
         target_data = read_cis_file(target_file; threshold)
     end
-    println("Loading and dealing with background dataset...")
-    @timeit to "Load bkg" bkg_data = read_bkg_bim(bkg_plink_prefix)
-    if target_file_format == "omiga"
-        target_data = add_chr_pos_to_cis_tops(target_data, bkg_data)
-        target_data[:,1] .= replace.(target_data[:,1],r"^chr"=>"")
+    begin
+        println_to_file("Loading and dealing with background dataset...", log_file)
+        bkg_data = DataFrame()
+        @timeit to "Load bkg" if isnothing(ldscore_file) 
+            bkg_data = read_bkg_bim(bkg_plink_prefix)
+        else
+            df_ldscore = CSV.File(ldscore_file, types=Dict(1 => String, 2 => String)) |> DataFrame
+            bkg_data = DataFrame(:chr => df_ldscore.chr, :start => df_ldscore.bp, :end => df_ldscore.bp, :variant_id => df_ldscore.SNP, :maf => df_ldscore.MAF, :ldscore => df_ldscore.ldscore)
+            println_to_file("[INFO] LD score file loaded, and the 'ldscore' column will be used for LD-match analysis.", log_file)
+        end
+        if target_file_format == "omiga"
+            target_data = add_chr_pos_to_cis_tops(target_data, bkg_data)
+            target_data[:,1] .= replace.(target_data[:,1],r"^chr"=>"")
+        end
+        n_rows_target = size(target_data, 1)
+        target_data_IC = getIntervalCollection(target_data)
     end
-    n_rows_target = size(target_data, 1)
-    target_data_IC = getIntervalCollection(target_data)
-    println("Loading annotation file...")
-    annotation_IC = Vector{GenomicIntervalCollection}(undef, length(annot_file_list))
-    @threads for i in 1:length(annot_file_list)
-        annotation_IC[i] = getIntervalCollection(read_annot_bed(annot_file_list[i]))
+    begin
+        annotation_IC = Vector{GenomicIntervalCollection}(undef, length(annot_file_list))
+        @threads for i in eachindex(annot_file_list)
+            annotation_IC[i] = getIntervalCollection(read_annot_bed(annot_file_list[i]))
+        end
+        println_to_file("[INFO] $(length(annot_file_list)) annotation file(s) loaded.", log_file)
     end
+    println_to_file("Performing $(n_perms) times permutation-based enrichment analysis, start at: $(now())", log_file)
     target_overlap_result = DataFrame()
-    for i in 1:length(annot_file_list)
+    for i in eachindex(annot_file_list)
         chromatin_category_data = annotation_IC[i]
         target_overlap_result_1 = getInterval(target_data_IC, chromatin_category_data)
         target_overlap_result_1.bed_file .= basename(annot_file_list[i])
@@ -218,11 +278,9 @@ function runOmiGA_enrich(
     end
     target_overlap_result = DataFrames.combine(groupby(target_overlap_result, [:metadata_B, :bed_file]), nrow => :count)
     target_overlap_result.prop = target_overlap_result.count ./ n_rows_target
-    println("Performing permutation test for $(n_perms) times...")
-    @timeit to "Permutation" permuted_results = enrichment_permutation(n_perms, bkg_data, target_data, annotation_IC, annot_file_list; maf_match=maf_match, use_region=use_region)
-    println("Calculating P values...")
+    @timeit to "Permutation" permuted_results = enrichment_permutation(n_perms, bkg_data, target_data, annotation_IC, annot_file_list; maf_match=maf_match, ld_match=ld_match, use_region=use_region)
     enrichment_result = calcu_enrichment_p(target_overlap_result, permuted_results, n_perms)
-    println("Enrichment analysis completed.")
+    println_to_file(" * Enrichment analysis completed.", log_file)
     CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".enrich.csv")), enrichment_result, compress=false)
     if _args_debug
         println_to_file(string(to), log_file)

@@ -51,21 +51,21 @@ function Genotype(geno_file_prefix::String; mac_threshold::T1=1, maf_threshold::
     if !_args_nofilter
         mafs = copy(annotation.af)
         if sum(mafs .> 0.5) == 0
-            println_to_file("\n\t* User provided major allele coding genotype or no variants with allele frequency > 0.5", log_file)
+            println_to_file("\n    * User provided major allele coding genotype or no variants with allele frequency > 0.5", log_file)
         else
             mafs[mafs.>FloatT(0.5)] .= 1 .- mafs[mafs.>FloatT(0.5)]
         end
         if _args_debug
-            println_to_file("\n\t* Description for AF of genotype data:", log_file)
+            println_to_file("\n    * Description for AF of genotype data:", log_file)
             println_to_file(string(summarystats(annotation.af)), log_file)
-            println_to_file("\n\t* Description for MAF of genotype data:", log_file)
+            println_to_file("\n    * Description for MAF of genotype data:", log_file)
             println_to_file(string(summarystats(mafs)), log_file)
         end
         macs = round.(Int, mafs .* 2n_samples_g)
         @runif _args_debug println("compute het_rate")
         annotation.het_rate = get_allele_het_rate(geno_file_prefix; kept_samples=loaded_n_samples == n_samples_g ? nothing : idxlist_kept_geno_samples)
         if _args_debug
-            println_to_file("\n\t* Description for Het_rate of genotype data:", log_file)
+            println_to_file("\n    * Description for Het_rate of genotype data:", log_file)
             println_to_file(string(summarystats(annotation.het_rate)), log_file)
         end
         @runif USE_Float32 annotation.het_rate = FloatT.(annotation.het_rate)
@@ -83,8 +83,8 @@ function Genotype(geno_file_prefix::String; mac_threshold::T1=1, maf_threshold::
         end
         eliminate_index = mac_eliminate_index .| maf_eliminate_index .| het_rate_eliminate_index
         if any(eliminate_index)
-            @runif !use_dominance println_to_file(string("\t[INFO] Eliminated ", sum(eliminate_index), " variants (", sum(mac_eliminate_index), " with MAC < ", mac_threshold, ", ", sum(maf_eliminate_index), " with MAF < ", maf_threshold, " and ", sum(het_rate_eliminate_index), " with Heterozygosity rate ≥ ", het_rate_threshold, ")"), log_file)
-            @runif use_dominance println_to_file(string("\t[INFO] Eliminated ", sum(eliminate_index), " variants (", sum(mac_eliminate_index), " with MAC < ", mac_threshold, ", ", sum(maf_eliminate_index), " with MAF < ", maf_threshold, " and ", sum(het_rate_eliminate_index), " with Heterozygosity rate ≥ ", het_rate_threshold, " and/or ≤ ", 1 - het_rate_threshold, ")"), log_file)
+            @runif !use_dominance println_to_file(string("    [INFO] Eliminated ", sum(eliminate_index), " variants (", sum(mac_eliminate_index), " with MAC < ", mac_threshold, ", ", sum(maf_eliminate_index), " with MAF < ", maf_threshold, " and ", sum(het_rate_eliminate_index), " with Heterozygosity rate ≥ ", het_rate_threshold, ")"), log_file)
+            @runif use_dominance println_to_file(string("    [INFO] Eliminated ", sum(eliminate_index), " variants (", sum(mac_eliminate_index), " with MAC < ", mac_threshold, ", ", sum(maf_eliminate_index), " with MAF < ", maf_threshold, " and ", sum(het_rate_eliminate_index), " with Heterozygosity rate ≥ ", het_rate_threshold, " and/or ≤ ", 1 - het_rate_threshold, ")"), log_file)
         end
         snps_pass_maf_threshold = fill(true,size(annotation,1))
         snps_pass_het_threshold = fill(true,size(annotation,1))
@@ -106,7 +106,7 @@ function Genotype(geno_file_prefix::String; mac_threshold::T1=1, maf_threshold::
                 snps_pass_maf_threshold .&= (maf_top50per .> maf_threshold_interaction) .& (maf_bottom50per .> maf_threshold_interaction)
                 snps_pass_het_threshold .&= (het_top50per .< het_threshold_interaction) .& (het_bottom50per .< het_threshold_interaction)
             end
-            println_to_file(string("\t[INFO] Eliminated ", sum(.!(snps_pass_maf_threshold .& snps_pass_het_threshold)), " variants due to '--maf-threshold-interaction ", maf_threshold_interaction, "' and '--het-threshold-interaction ", het_threshold_interaction, "'"), log_file)
+            println_to_file(string("    [INFO] Eliminated ", sum(.!(snps_pass_maf_threshold .& snps_pass_het_threshold)), " variants due to '--maf-threshold-interaction ", maf_threshold_interaction, "' and '--het-threshold-interaction ", het_threshold_interaction, "'"), log_file)
         end
     end
     idxlist_pass_filter_variants = idxlist_pass_filter_variants[.!eliminate_index .& snps_pass_maf_threshold .& snps_pass_het_threshold]
@@ -155,15 +155,41 @@ mutable struct Phenotype{T<:AbstractFloat}
 end
 function Phenotype(phenotype_bed_file::String; rm_pheno_threshold::T=0.1, chrom::Vector{String}=String[], extract_pheno_file::Union{String,Nothing}=nothing, extract_pheno_name::Vector{String}=String[], exclude_pheno_file::Union{String,Nothing}=nothing, exclude_pheno_name::Vector{String}=String[], id_map::Union{Nothing, DataFrame}=nothing, extract_samples::Union{Nothing, Vector{String}}=nothing) where {T<:AbstractFloat}
     if isfile(phenotype_bed_file)
-        phenotype_bed = CSV.File(phenotype_bed_file, header=true, buffer_in_memory=true, types=Dict(1 => String, 2 => Int, 3 => Int, 4 => String)) |> DataFrame
+        phenofilesize = filesize(phenotype_bed_file) / 1024^3
+        low_mem = false || _args_low_mem
+        if phenofilesize > 5
+            low_mem = true
+            println_to_file(string("\n    * Warning: The phenotype file size reached $(round(phenofilesize, digits=2)) GB. OmiGA will load it in Memory-Saving mode. If the program crashes, please conduct chromosome-by-chromosome analysis by specifying the '--chrom' option."), log_file)
+        end
+        if length(chrom) > 0
+            if low_mem && length(chrom) > 1
+                error("Length of the '--chrom' option can not be more than 1 in Memory-Saving mode.")
+            end
+            if length(chrom) == 1
+                phenotype_bed_first5cols = CSV.File(phenotype_bed_file, header=true, buffer_in_memory=!low_mem, types=Dict(1 => String), select=1:1) |> DataFrame
+                subindices = findall(phenotype_bed_first5cols[:, 1] .∈ (chrom,))
+                skipto_nrow = minimum(subindices) + 1
+                limit_nrow = maximum(subindices) - minimum(subindices) + 1
+                if limit_nrow != length(subindices)
+                    error("Unsorted phenotype file!")
+                end
+                phenotype_bed = CSV.File(phenotype_bed_file, header=true, buffer_in_memory=!low_mem, types=Dict(1 => String, 2 => Int, 3 => Int, 4 => String), skipto=skipto_nrow, limit=limit_nrow, ntasks=1) |> DataFrame
+            else
+                phenotype_bed = CSV.File(phenotype_bed_file, header=true, buffer_in_memory=!low_mem, types=Dict(1 => String, 2 => Int, 3 => Int, 4 => String)) |> DataFrame
+                phenotype_bed = phenotype_bed[phenotype_bed[:, 1].∈(chrom,), :]
+            end
+        else
+            phenotype_bed = CSV.File(phenotype_bed_file, header=true, buffer_in_memory=!low_mem, types=Dict(1 => String, 2 => Int, 3 => Int, 4 => String)) |> DataFrame
+        end
     else
         error("Phenotype file does not exist, please check!")
     end
-    @runif USE_Float32 df_to_32bit!(phenotype_bed)
-    iid = names(phenotype_bed)[5:end]
-    if length(chrom) > 0
-        phenotype_bed = phenotype_bed[phenotype_bed[:, 1].∈(chrom,), :]
+    with_strand = any(phenotype_bed[:,4] .∈ (["+","-"],))
+    if with_strand
+        phenotype_bed[:, 5] .= string.(phenotype_bed[:, 5]) 
     end
+    @runif USE_Float32 df_to_32bit!(phenotype_bed)
+    iid = names(phenotype_bed)[(5+with_strand):end]
     phenotype_pairs = nothing
     if !isnothing(extract_pheno_file)
         extract_pheno_df = CSV.File(extract_pheno_file, header=false, buffer_in_memory=true, types=String) |> DataFrame
@@ -177,7 +203,7 @@ function Phenotype(phenotype_bed_file::String; rm_pheno_threshold::T=0.1, chrom:
         else
             error("")
         end
-        phenotype_bed = phenotype_bed[phenotype_bed[:, 4].∈(extract_pheno_list,), :]
+        phenotype_bed = phenotype_bed[phenotype_bed[:, 4+with_strand].∈(extract_pheno_list,), :]
     end
     if !isnothing(exclude_pheno_file)
         exclude_pheno_df = CSV.File(exclude_pheno_file, header=false, buffer_in_memory=true, types=String) |> DataFrame
@@ -187,25 +213,29 @@ function Phenotype(phenotype_bed_file::String; rm_pheno_threshold::T=0.1, chrom:
         else
             error("")
         end
-        phenotype_bed = phenotype_bed[.!(phenotype_bed[:, 4] .∈ (extract_pheno_list,)), :]
+        phenotype_bed = phenotype_bed[.!(phenotype_bed[:, 4+with_strand] .∈ (extract_pheno_list,)), :]
     end
     if length(extract_pheno_name) > 0
-        phenotype_bed = phenotype_bed[phenotype_bed[:, 4].∈(extract_pheno_name,), :]
+        phenotype_bed = phenotype_bed[phenotype_bed[:, 4+with_strand].∈(extract_pheno_name,), :]
     end
     if length(exclude_pheno_name) > 0
-        phenotype_bed = phenotype_bed[.!(phenotype_bed[:, 4] .∈ (exclude_pheno_name,)), :]
+        phenotype_bed = phenotype_bed[.!(phenotype_bed[:, 4+with_strand] .∈ (exclude_pheno_name,)), :]
     end
-    annotation = phenotype_bed[:, 1:4]      
-    rename!(annotation, ["chrom", "start", "end", "pheno_id"])
-    annotation.start .+= 1
-    annotation.end .+= 1
-    phenotype = permutedims(phenotype_bed[:, 5:end]) |> Matrix{FloatT}
+    annotation = phenotype_bed[:, 1:(4+with_strand)]      
+    if !with_strand
+        rename!(annotation, ["chrom", "start", "end", "pheno_id"])
+    else
+        rename!(annotation, ["chrom", "start", "end", "strand", "pheno_id"])
+    end
+    annotation.start .+= (1 - _args_base_index) 
+    annotation.end .+= (1 - _args_base_index) 
+    phenotype = permutedims(phenotype_bed[:, (5+with_strand):end]) |> Matrix{FloatT}
     n_samples_e, n_phenotypes = size(phenotype)      
     keep_index = [sum(phenotype[:, i] .>= median(phenotype[:, i])) for i in 1:n_phenotypes] .>= rm_pheno_threshold * n_samples_e
     if sum(keep_index) < n_phenotypes
-        println_to_file(string("\n\t* Warning: Eliminated ", n_phenotypes - sum(keep_index), " phenotypes with < ", rm_pheno_threshold * 100, "% samples greater than median value (the expected value is 50% for normally distributed data)"), log_file)
+        println_to_file(string("\n    * Warning: Eliminated ", n_phenotypes - sum(keep_index), " phenotypes with < ", rm_pheno_threshold * 100, "% samples greater than median value (the expected value is 50% for normally distributed data)"), log_file)
         elp_file = replace(log_file, r".log$" => ".elp")
-        println_to_file(string("\t* Description for the eliminated phenotypes can be found in ", elp_file), log_file)
+        println_to_file(string("    * Description for the eliminated phenotypes can be found in ", elp_file), log_file)
         describe_df = describe(DataFrame(phenotype[:, .!keep_index], :auto), :mean, :std, :min, :q25, :median, :q75, :max, :nuniqueall)
         describe_df.variable .= annotation.pheno_id[.!keep_index]
         CSV.write(elp_file, describe_df, delim="\t")
@@ -243,7 +273,7 @@ function Phenotype(phenotype_bed_file::String; rm_pheno_threshold::T=0.1, chrom:
 end
 function Phenotype(phenotype_file::String, pheno_annot_file::Union{String,Nothing}; rm_pheno_threshold::T=0.1, chrom::Vector{String}=String[], extract_pheno_file::Union{String,Nothing}=nothing, extract_pheno_name::Vector{String}=String[], exclude_pheno_file::Union{String,Nothing}=nothing, exclude_pheno_name::Vector{String}=String[], id_map::Union{Nothing, DataFrame}=nothing, extract_samples::Union{Nothing, Vector{String}}=nothing) where {T<:AbstractFloat}
     if isfile(phenotype_file)
-        phenotype_bed = CSV.File(phenotype_file, header=true, buffer_in_memory=true, missingstring=["nan", "na", "NA", "NaN", "NAN", ""], types=Dict(1=>String)) |> DataFrame
+        phenotype_bed = CSV.File(phenotype_file, header=true, buffer_in_memory=!_args_low_mem, missingstring=["nan", "na", "NA", "NaN", "NAN", ""], types=Dict(1=>String)) |> DataFrame
     else
         error("Phenotype file does not exist, please check!")
     end
@@ -257,7 +287,13 @@ function Phenotype(phenotype_file::String, pheno_annot_file::Union{String,Nothin
     annotation = nothing
     @runif !isnothing(pheno_annot_file) if isfile(pheno_annot_file)
         annotation = CSV.File(pheno_annot_file, header=true, buffer_in_memory=true, types=Dict(1 => String, 2 => Int64, 3 => Int64, 4 => String)) |> DataFrame
-        rename!(annotation, ["chrom", "start", "end", "pheno_id"])
+        with_strand = any(annotation[:,4] .∈ (["+","-"],))
+        if with_strand
+            rename!(annotation, ["chrom", "start", "end", "strand", "pheno_id"])
+            annotation.pheno_id .= string.(annotation.pheno_id) 
+        else
+            rename!(annotation, ["chrom", "start", "end", "pheno_id"])
+        end
     else
         error("Annotation file does not exist, please check!")
     end
@@ -276,8 +312,8 @@ function Phenotype(phenotype_file::String, pheno_annot_file::Union{String,Nothin
         annotation = DataFrame(chrom=repeat(["n.s."], n_phenotypes), start_pos=repeat([-1], n_phenotypes), end_pos=repeat([-1], n_phenotypes), pheno_id=pheno_id)
         rename!(annotation, ["chrom", "start", "end", "pheno_id"])
     end
-    annotation.start .+= 1
-    annotation.end .+= 1
+    annotation.start .+= (1 - _args_base_index) 
+    annotation.end .+= (1 - _args_base_index) 
     phenotype_pairs = nothing
     if !isnothing(extract_pheno_file)
         extract_pheno_df = CSV.File(extract_pheno_file, header=false, buffer_in_memory=true, types=String) |> DataFrame
@@ -323,9 +359,9 @@ function Phenotype(phenotype_file::String, pheno_annot_file::Union{String,Nothin
     n_samples_e, n_phenotypes = size(phenotype)      
     keep_index = [sum(phenotype[:, i] .> median(phenotype[:, i])) for i in 1:n_phenotypes] .>= rm_pheno_threshold * n_samples_e
     if sum(keep_index) < n_phenotypes
-        println_to_file(string("\tWarning: Eliminated ", n_phenotypes - sum(keep_index), " phenotypes with < ", rm_pheno_threshold * 100, "% samples greater than median value (the expected value is 50% for normally distributed data)"), log_file)
+        println_to_file(string("    Warning: Eliminated ", n_phenotypes - sum(keep_index), " phenotypes with < ", rm_pheno_threshold * 100, "% samples greater than median value (the expected value is 50% for normally distributed data)"), log_file)
         elp_file = replace(log_file, r".log$" => ".elp")
-        println_to_file(string("\tDescription for the eliminated phenotypes can be found in ", elp_file), log_file)
+        println_to_file(string("    Description for the eliminated phenotypes can be found in ", elp_file), log_file)
         describe_df = describe(DataFrame(phenotype[:, .!keep_index], :auto), :mean, :std, :min, :q25, :median, :q75, :max, :nuniqueall)
         describe_df.variable .= annotation.pheno_id[.!keep_index]
         CSV.write(elp_file, describe_df, delim="\t")
@@ -361,11 +397,20 @@ end
 function Phenotype_annot(pheno_annot_file::String; chrom::Vector{String}=String[], extract_pheno_file::Union{String,Nothing}=nothing, exclude_pheno_file::Union{String,Nothing}=nothing)
     annotation = nothing
     if isfile(pheno_annot_file)
-        annotation = CSV.File(pheno_annot_file, header=true, buffer_in_memory=true, types=Dict(1 => String, 2 => Int64, 3 => Int64, 4 => String), select=[1, 2, 3, 4]) |> DataFrame
-        rename!(annotation, ["chrom", "start", "end", "pheno_id"])
+        annotation = CSV.File(pheno_annot_file, header=true, buffer_in_memory=true, types=Dict(1 => String, 2 => Int64, 3 => Int64, 4 => String)) |> DataFrame
+        if size(annotation,2) == 4
+            rename!(annotation, ["chrom", "start", "end", "pheno_id"])
+        elseif size(annotation,2) == 5
+            rename!(annotation, ["chrom", "start", "end", "strand", "pheno_id"])
+            annotation.pheno_id .= string.(annotation.pheno_id)
+        else
+            error("Incorrect annotation file.")
+        end
     else
         error("Annotation file does not exist, please check!")
     end
+    annotation.start .+= (1 - _args_base_index) 
+    annotation.end .+= (1 - _args_base_index) 
     if length(chrom) > 0
         annotation = annotation[annotation.chrom.∈(chrom,), :]
     end
@@ -519,7 +564,7 @@ function Covariates(covar_file::Union{String,Nothing}, n_samples::Union{Nothing,
     Covariates{eltype(X_MME)}(X_MME, iid, n_samples, n_covars)
 end
 function Covariates(_X_MME::Matrix{T2}, genotype::Union{Matrix{T1},Nothing}, af::Union{Vector{T2},Nothing}, phenotype::Union{Matrix{T2},Nothing}, n_geno_pc::Union{Nothing,Int}, n_phen_pc::Union{Nothing,Int}, dprop::Vector{Float64}, iid::Union{Vector,Nothing}; rm_collinear_covar::Union{Nothing,T3}=nothing, PCAForQTL::Union{Nothing,String}=nothing) where {T1<:Integer,T2<:AbstractFloat,T3<:AbstractFloat}
-    n_samples = size(phenotype, 1)
+    n_samples, n_phenos = size(phenotype)
     X_MME = copy(_X_MME)
     _X_c = size(X_MME, 2) - 1
     pc_covar_names = []
@@ -540,13 +585,13 @@ function Covariates(_X_MME::Matrix{T2}, genotype::Union{Matrix{T1},Nothing}, af:
     end
     if n_geno_pc > 0
         n_samples, n_snps = size(genotype)
-        n_snps = size(genotype, 2)
         if n_snps < 1000000
-            pca_snp_index = 1:n_snps |> Vector
+            genotype_adj = genotype .- (2 * af)'
         else
+            println_to_file(string("    * 1,000,000 variants were used to compute genotype PCs."), log_file)
             pca_snp_index = floor.(Int, Vector(range(1, n_snps, length=1000000)))
+            genotype_adj = genotype[:, pca_snp_index] .- (2 * af[pca_snp_index])'
         end
-        genotype_adj = genotype[:, pca_snp_index] .- (2 * af[pca_snp_index])'
         geno_pc = fit(PCA, genotype_adj, pratio=1)
         CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".geno.eigvals")), DataFrame(pc=1:size(geno_pc, 2), eigenval=eigvals(geno_pc), varprop=geno_pc.prinvars ./ geno_pc.tprinvar), delim="\t")
         @runif n_geno_pc == n_samples if !isnothing(dprop_gpc)
@@ -571,7 +616,13 @@ function Covariates(_X_MME::Matrix{T2}, genotype::Union{Matrix{T1},Nothing}, af:
         X_MME = [X_MME geno_pc.proj[:, 1:n_geno_pc]]
     end
     if n_phen_pc > 0
-        phen_pc = fit(PCA, phenotype, pratio=1)
+        if n_phenos < 1000000
+            phen_pc = fit(PCA, phenotype, pratio=1)
+        else
+            println_to_file(string("    * 1,000,000 phenotypes were used to compute phenotype PCs."), log_file)
+            pca_pheno_index = floor.(Int, Vector(range(1, n_phenos, length=1000000)))
+            phen_pc = fit(PCA, phenotype[:, pca_pheno_index], pratio=1)
+        end
         CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".phen.eigvals")), DataFrame(pc=1:size(phen_pc, 2), eigenval=eigvals(phen_pc), varprop=phen_pc.prinvars ./ phen_pc.tprinvar), delim="\t")
         @runif n_phen_pc == n_samples if !isnothing(dprop_ppc)
             prop_explained = eigvals(phen_pc) ./ sum(eigvals(phen_pc))
@@ -604,7 +655,7 @@ function Covariates(_X_MME::Matrix{T2}, genotype::Union{Matrix{T1},Nothing}, af:
         end
     end
     n_covars = size(X_MME,2)
-    println_to_file(string("\t[INFO] Automatically generated covariates were stored in ", joinpath(_args_output_dir, string(_args_out_prefix, ".auto_covar"))), log_file)
+    println_to_file(string("    [INFO] Automatically generated covariates were stored in ", joinpath(_args_output_dir, string(_args_out_prefix, ".auto_covar"))), log_file)
     CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".auto_covar")), hcat(DataFrame(CovarName=pc_covar_names), DataFrame(X_MME[:,2:end]', iid)), delim="\t")
     Covariates{eltype(X_MME)}(X_MME, iid, n_samples, n_covars)
 end
@@ -661,10 +712,10 @@ function InteractionTerm(interaction_file::Union{Nothing,String}=nothing, id_map
                 vif_df = calculate_vif(ITERM; add_intercept=true)
                 vif_file = replace(log_file, r".log$" => ".iterm.vif")
                 CSV.write(vif_file, vif_df, delim="\t")
-                error(string("\tThe interaction term matrix is not full rank (", rank(ITERM), "), please remove the redundant items with high VIF (", vif_file, ")."))
+                error(string("    The interaction term matrix is not full rank (", rank(ITERM), "), please remove the redundant items with high VIF (", vif_file, ")."))
             end
             if rank(hcat(ones(n_samples), ITERM)) <= n_iterms
-                @warn string("\tTo avoid multicollinearity, the genetic main effect will be excluded as it is entirely explained by the interactions.")
+                @warn string("    To avoid multicollinearity, the genetic main effect will be excluded as it is entirely explained by the interactions.")
                 global gxe_omit_main_eff = true 
             end
         end
@@ -723,7 +774,7 @@ function Kinship(genotype::AbstractMatrix{T1}, adjusted::Bool; afs::Vector{T2}, 
     grm_snps = isnothing(_args_grm_snps) ? n_snps : _args_grm_snps
     @runif n_snps > grm_snps begin
         grm_snp_index = floor.(Int, Vector(range(1, n_snps, length=grm_snps)))
-        println_to_file(string("\n\t* ", grm_snps, " variants used for building GRM."), log_file)
+        println_to_file(string("\n    * ", grm_snps, " variants used for building GRM."), log_file)
     end
     if n_snps <= grm_snps
         GRM = getG(genotype; alpha=grm_alpha, afs=afs, return_eltype=FloatT)
@@ -731,9 +782,9 @@ function Kinship(genotype::AbstractMatrix{T1}, adjusted::Bool; afs::Vector{T2}, 
         GRM = getG(genotype[:, grm_snp_index]; alpha=grm_alpha, afs=afs[grm_snp_index], return_eltype=FloatT)
     end
     if _args_debug
-        println_to_file("\n\t* Description for diagonal elements of GRM:", log_file)
+        println_to_file("\n    * Description for diagonal elements of GRM:", log_file)
         println_to_file(string(summarystats(GRM[diagind(GRM)])), log_file)
-        println_to_file("\n\t* Description for lower triangular elements of GRM:", log_file)
+        println_to_file("\n    * Description for lower triangular elements of GRM:", log_file)
         println_to_file(string(summarystats(GRM[lower_tri(size(GRM, 1))])), log_file)
     end
     GC.gc()
@@ -756,9 +807,9 @@ function Kinship(genotype::AbstractMatrix{T1}, adjusted::Bool; afs::Vector{T2}, 
             domGRM = getG_dominance(byrow ? dom_genotype[:, grm_snp_index] : dom_genotype[grm_snp_index, :], code_type="dominance", afs=Float64.(afs[grm_snp_index]), byrow=byrow, return_eltype=FloatT)
         end
         if _args_debug
-            println_to_file("\n\t* Description for diagonal elements of domGRM:", log_file)
+            println_to_file("\n    * Description for diagonal elements of domGRM:", log_file)
             println_to_file(string(summarystats(domGRM[diagind(domGRM)])), log_file)
-            println_to_file("\n\t* Description for lower triangular elements of domGRM:", log_file)
+            println_to_file("\n    * Description for lower triangular elements of domGRM:", log_file)
             println_to_file(string(summarystats(domGRM[lower_tri(size(domGRM, 1))])), log_file)
         end
         if !isnothing(return_sparse)
@@ -817,6 +868,8 @@ function create_OUTDIR_and_LOG(output_dir::String, run_mode::Union{String, Nothi
         mediate_file_name = "her_est"
     elseif run_mode == "cis"
         mediate_file_name = "cis_qtl"
+    elseif run_mode == "cis_vqtl"
+        mediate_file_name = "cis_vqtl"
     elseif run_mode == "cis_independent"
         mediate_file_name = "cis_independent"
     elseif run_mode == "cis_interaction"
@@ -948,9 +1001,19 @@ function prepare_Data()
         end
         loaded_pheno = true
         if !isnothing(phenotype_bed_file)
-            pheno_file_format = endswith(phenotype_bed_file,r".bed|.bed.gz") ? "bed" : "plink"
+            if endswith(phenotype_bed_file,r".bed|.bed.gz|.BED|.BED.GZ")
+                pheno_file_format = "bed"
+                @runif isnothing(_args_base_index) global _args_base_index = 0
+            elseif endswith(phenotype_bed_file,r".opf|.opf.gz|.OPF|.OPF.GZ")
+                pheno_file_format = "omiga"
+                @runif isnothing(_args_base_index) global _args_base_index = 1
+            else
+                pheno_file_format = "plink"
+                @runif isnothing(_args_base_index) global _args_base_index = 1
+            end
         else
             pheno_file_format = "bed"
+            @runif isnothing(_args_base_index) global _args_base_index = 1
         end
         if (isnothing(phenotype_bed_file)) & (!isnothing(_args_pheno_annot_file))
             if _args_run_mode in ["simu"]
@@ -967,7 +1030,7 @@ function prepare_Data()
         end
         @runif loaded_pheno println_to_file("Loading phenotype file ...", log_file)
         @runif !loaded_pheno println_to_file("Loading phenotype annotation file ...\t", log_file)
-        @runif loaded_pheno elapsed_time = @elapsed if (pheno_file_format == "bed") & (isnothing(_args_pheno_annot_file))
+        @runif loaded_pheno elapsed_time = @elapsed if (pheno_file_format in ["bed", "omiga"]) & (isnothing(_args_pheno_annot_file))
             PHENO = Phenotype(phenotype_bed_file; rm_pheno_threshold=_args_rm_pheno_threshold, chrom=_args_chrom, extract_pheno_file=extract_pheno_file, extract_pheno_name=_args_extract_pheno_name, exclude_pheno_file=_args_exclude_pheno, exclude_pheno_name=_args_exclude_pheno_name, id_map=id_map, extract_samples=geno_sample_ids)
         elseif pheno_file_format == "plink"
             PHENO = Phenotype(phenotype_bed_file, _args_pheno_annot_file; rm_pheno_threshold=_args_rm_pheno_threshold, chrom=_args_chrom, extract_pheno_file=extract_pheno_file, extract_pheno_name=_args_extract_pheno_name, exclude_pheno_file=_args_exclude_pheno, exclude_pheno_name=_args_exclude_pheno_name, id_map=id_map,extract_samples=geno_sample_ids)
@@ -980,12 +1043,7 @@ function prepare_Data()
             println_to_file("Loading group annotation file ...\t", log_file)
             phenotype_group = CSV.File(_args_pheno_group_file, header=false) |> DataFrame
             rename!(phenotype_group, ["pheno_id", "group_id"])
-            if size(phenotype_group, 1) != PHENO.n_phenotypes
-                error(string("DimensionMismatch: unmatched length between phenotypes and group annotation!"))
-            end
-            if sum(PHENO.annotation.pheno_id .!= phenotype_group.pheno_id) > 0
-                error("IDMismatch: mismatched phenotype id between phenotype and group files!")
-            end
+            phenotype_group = phenotype_group[indexin(PHENO.annotation.pheno_id, phenotype_group.pheno_id), :]
             rep_counts, rep_first_indices = count_consecutive(phenotype_group.group_id)
             _, rep_last_indices = count_consecutive(phenotype_group.group_id; type="last")
             if length(rep_counts) != length(unique(phenotype_group.group_id))
@@ -996,7 +1054,7 @@ function prepare_Data()
                         push!(frequent_elements, element)  
                     end
                 end
-                error(string("Inconsecutive group ID: ", frequent_elements, " in phenotype group file, please check!"))
+                error(string("Inconsecutive group ID: ", frequent_elements, " in phenotype file, please check!"))
             end
             phenotype_group.first_appear .= false
             phenotype_group.first_appear[rep_first_indices] .= true
@@ -1006,9 +1064,9 @@ function prepare_Data()
             PHENO.annotation.group_id_first = phenotype_group.first_appear
             PHENO.annotation.group_id_last = phenotype_group.last_appear
         end
-        @runif loaded_pheno println_to_file(string("\tElapsed time: ", elapsed_time, " seconds"), log_file)
+        @runif loaded_pheno println_to_file(string("    Elapsed time: ", elapsed_time, " seconds"), log_file)
         @runif loaded_pheno @runif PHENO.n_samples < 5 error(string("Only ", PHENO.n_samples, " samples were loaded! Please check whether the sample IDs are matched between genotype and phenotype data. The `--id-map` option can be applied to provide ID conversion."))
-        @runif loaded_pheno println_to_file(string("\tLoaded (filtered) ", PHENO.n_samples, " samples, ", PHENO.n_phenotypes, " phenotypes"), log_file)
+        @runif loaded_pheno println_to_file(string("    Loaded (filtered) ", PHENO.n_samples, " samples, ", PHENO.n_phenotypes, " phenotypes"), log_file)
         if loaded_pheno
             phenotype_sample_id = PHENO.iid
         else
@@ -1016,7 +1074,7 @@ function prepare_Data()
         end
         if length(_args_phenotype_files) > 1
             phenotype_file_2 = _args_phenotype_files[2]
-            elapsed_time = @elapsed if (pheno_file_format == "bed") & (isnothing(_args_pheno_annot_file))
+            elapsed_time = @elapsed if (pheno_file_format in ["bed", "omiga"]) & (isnothing(_args_pheno_annot_file))
                 PHENO_2 = Phenotype(phenotype_file_2; rm_pheno_threshold=_args_rm_pheno_threshold, chrom=_args_chrom, extract_pheno_file=extract_pheno_file_2, extract_pheno_name=_args_extract_pheno_name, exclude_pheno_file=_args_exclude_pheno, exclude_pheno_name=_args_exclude_pheno_name, id_map=id_map, extract_samples=phenotype_sample_id)
             elseif pheno_file_format == "plink"
                 PHENO_2 = Phenotype(phenotype_file_2, _args_pheno_annot_file; rm_pheno_threshold=_args_rm_pheno_threshold, chrom=_args_chrom, extract_pheno_file=extract_pheno_file_2, extract_pheno_name=_args_extract_pheno_name, exclude_pheno_file=_args_exclude_pheno, exclude_pheno_name=_args_exclude_pheno_name, id_map=id_map, extract_samples=phenotype_sample_id)
@@ -1036,7 +1094,7 @@ function prepare_Data()
             end
             println_to_file("Loading interaction file ...", log_file)
             elapsed_time = @elapsed ITERM = InteractionTerm(_args_interaction_file, id_map; extract_samples=phenotype_sample_id)
-            println_to_file(string("\tElapsed time: ", elapsed_time, " seconds"), log_file)
+            println_to_file(string("    Elapsed time: ", elapsed_time, " seconds"), log_file)
             ITERM_vec = ITERM.ITERM
         else
             ITERM = nothing
@@ -1045,15 +1103,15 @@ function prepare_Data()
         @runif loaded_pheno if !isnothing(covar_file) 
             println_to_file("Loading covariates file ...", log_file)
             elapsed_time = @elapsed COVAR = Covariates(covar_file; extract_covar_name=extract_covar_name, exclude_covar_name=exclude_covar_name, dcovar_name=dcovar_name, covar_transpose=_args_covar_transpose, rm_collinear_covar=_args_rm_collinear_covar, id_map=id_map, extract_samples=phenotype_sample_id)
-            println_to_file(string("\tElapsed time: ", elapsed_time, " seconds"), log_file)
-            println_to_file(string("\tLoaded ", COVAR.n_samples, " samples, ", COVAR.n_covars - ifelse(_args_no_intercept, 0, 1), " covariates"), log_file)
+            println_to_file(string("    Elapsed time: ", elapsed_time, " seconds"), log_file)
+            println_to_file(string("    Loaded ", COVAR.n_samples, " samples, ", COVAR.n_covars - ifelse(_args_no_intercept, 0, 1), " covariates"), log_file)
         end
         loaded_geno = false
         if !isnothing(_args_geno_file_prefix) 
             println_to_file("Loading genotype file ...", log_file)
             elapsed_time = @elapsed GENO = Genotype(_args_geno_file_prefix; mac_threshold=_args_mac_threshold, maf_threshold=FloatT(_args_maf_threshold), maf_threshold_interaction=FloatT(_args_maf_threshold_interaction), het_threshold_interaction=FloatT(_args_het_threshold_interaction), het_rate_threshold=FloatT(_args_het_rate_threshold), byrow=is_sample_byrow, ITERM=ITERM_vec, keep_raw_geno=false, extract_samples=phenotype_sample_id, id_map=id_map, low_mem=_args_low_mem, use_dominance=use_dominance)
-            println_to_file(string("\tElapsed time: ", elapsed_time, " seconds"), log_file)
-            println_to_file(string("\tLoaded (filtered) ", GENO.n_samples, " samples, ", GENO.n_snps, " variants"), log_file)
+            println_to_file(string("    Elapsed time: ", elapsed_time, " seconds"), log_file)
+            println_to_file(string("    Loaded (filtered) ", GENO.n_samples, " samples, ", GENO.n_snps, " variants"), log_file)
             loaded_geno = true
         else
             GENO = nothing
@@ -1070,8 +1128,8 @@ function prepare_Data()
             if !isnothing(covar_file_2)
                 println_to_file("Loading covariates file ...\t", log_file)
                 elapsed_time = @elapsed COVAR_2 = Covariates(covar_file_2; extract_covar_name=extract_covar_name_2, exclude_covar_name=exclude_covar_name_2, dcovar_name=dcovar_name_2, covar_transpose=_args_covar_transpose, rm_collinear_covar=_args_rm_collinear_covar, id_map=id_map, extract_samples=phenotype_sample_id)
-                println_to_file(string("\tElapsed time: ", elapsed_time, " seconds"), log_file)
-                println_to_file(string("\tLoaded ", COVAR_2.n_samples, " samples, ", COVAR_2.n_covars - ifelse(_args_no_intercept, 0, 1), " covariates"), log_file)
+                println_to_file(string("    Elapsed time: ", elapsed_time, " seconds"), log_file)
+                println_to_file(string("    Loaded ", COVAR_2.n_samples, " samples, ", COVAR_2.n_covars - ifelse(_args_no_intercept, 0, 1), " covariates"), log_file)
             else
                 if !isnothing(PHENO.n_samples)
                     COVAR_2 = Covariates(covar_file_2, PHENO.n_samples)
@@ -1080,28 +1138,30 @@ function prepare_Data()
                 end
             end
         end
-        if !_args_low_mem
-            if !isnothing(_args_geno_pc_covar) || !isnothing(_args_phen_pc_covar) || length(_args_dprop_pc_covar) > 0 || !isnothing(_args_PCAForQTL) 
-                n_geno_pc_covar = _args_geno_pc_covar
-                n_phen_pc_covar = _args_phen_pc_covar
-                if (length(_args_dprop_pc_covar) > 0) || !isnothing(_args_PCAForQTL)
-                    @runif isnothing(n_geno_pc_covar) n_geno_pc_covar = GENO.n_samples
-                    @runif isnothing(n_phen_pc_covar) n_phen_pc_covar = GENO.n_samples
-                else
-                    @runif isnothing(n_geno_pc_covar) n_geno_pc_covar = 0
-                    @runif isnothing(n_phen_pc_covar) n_phen_pc_covar = 0
-                end
-                COVAR = Covariates(COVAR.X_MME, isnothing(GENO) ? nothing : GENO.genotype, isnothing(GENO) ? nothing : GENO.annotation.af, isnothing(PHENO) ? nothing : PHENO.phenotype, n_geno_pc_covar, n_phen_pc_covar, isnothing(_args_PCAForQTL) ? _args_dprop_pc_covar : Float64[], isnothing(COVAR.iid) ? PHENO.iid : COVAR.iid; rm_collinear_covar=_args_rm_collinear_covar, PCAForQTL=_args_PCAForQTL)
+        if !isnothing(_args_geno_pc_covar) || !isnothing(_args_phen_pc_covar) || length(_args_dprop_pc_covar) > 0 || !isnothing(_args_PCAForQTL) 
+            if _args_low_mem && !isnothing(_args_chunk_size)
+                error("PCA is disable when using the '--chunk-size' option.")
             end
-        else
-            @info "--dprop-pc-covar is disable when using --chunk-size."
+            if length(_args_chrom) > 0
+                error("PCA is disable when using the '--chrom' option.")
+            end
+            n_geno_pc_covar = _args_geno_pc_covar
+            n_phen_pc_covar = _args_phen_pc_covar
+            if (length(_args_dprop_pc_covar) > 0) || !isnothing(_args_PCAForQTL)
+                @runif isnothing(n_geno_pc_covar) n_geno_pc_covar = GENO.n_samples
+                @runif isnothing(n_phen_pc_covar) n_phen_pc_covar = GENO.n_samples
+            else
+                @runif isnothing(n_geno_pc_covar) n_geno_pc_covar = 0
+                @runif isnothing(n_phen_pc_covar) n_phen_pc_covar = 0
+            end
+            COVAR = Covariates(COVAR.X_MME, isnothing(GENO) ? nothing : GENO.genotype, isnothing(GENO) ? nothing : GENO.annotation.af, isnothing(PHENO) ? nothing : PHENO.phenotype, n_geno_pc_covar, n_phen_pc_covar, isnothing(_args_PCAForQTL) ? _args_dprop_pc_covar : Float64[], isnothing(COVAR.iid) ? PHENO.iid : COVAR.iid; rm_collinear_covar=_args_rm_collinear_covar, PCAForQTL=_args_PCAForQTL)
         end
         @runif !isnothing(ITERM_vec) if !_args_no_add_interaction_to_covar
             COVAR.X_MME = remove_collinear_columns([COVAR.X_MME ITERM_vec], cor_cutoff=_args_rm_collinear_covar, return_index=false)
             COVAR.n_covars = size(COVAR.X_MME, 2)
         end
         @runif loaded_pheno if rank(COVAR.X_MME) < COVAR.n_covars
-            @warn string("\tThe covariates matrix is not full rank (", rank(COVAR.X_MME), "), the redundant covariates with high VIF were removed.")
+            @warn string("    The covariates matrix is not full rank (", rank(COVAR.X_MME), "), the redundant covariates with high VIF were removed.")
             @suppress_err COVAR.X_MME = remove_multicollinearity(COVAR.X_MME)
             COVAR.n_covars = size(COVAR.X_MME, 2)
         end
@@ -1109,7 +1169,7 @@ function prepare_Data()
         @runif loaded_inte println_to_file(string("    * ", COVAR.n_covars, " covariates", ifelse(_args_no_intercept, "", " (including intercept and/or interaction terms)"), " were used."), log_file)
         if length(_args_covar_files) > 1
             if rank(COVAR_2.X_MME) < COVAR_2.n_covars
-                error(string("\tThe covariates matrix is not full rank (",rank(COVAR_2.X_MME),"), please check!"))
+                error(string("    The covariates matrix is not full rank (",rank(COVAR_2.X_MME),"), please check!"))
             end
         end
         loaded_domgeno = false
@@ -1117,7 +1177,7 @@ function prepare_Data()
         @runif loaded_geno if use_dominance
             println_to_file("Processing dominance data ...\t", log_file)
             elapsed_time = @elapsed DOM = Dominance(GENO.genotype, GENO.annotation, is_sample_byrow; geno_file_prefix=_args_geno_file_prefix)
-            println_to_file(string("\tElapsed time: ", elapsed_time, " seconds"), log_file)
+            println_to_file(string("    Elapsed time: ", elapsed_time, " seconds"), log_file)
             loaded_domgeno = true
         else
             DOM = nothing
@@ -1135,7 +1195,7 @@ function prepare_Data()
         else
             PRIOR_HerB = nothing
         end
-        println_to_file("Data have been loaded.", log_file)
+        println_to_file("✅ Data loading completed.", log_file)
     end
     @timeit to "Summary and Check data" begin
         @runif loaded_geno & loaded_pheno if sum(GENO.iid .!= PHENO.iid) > 0
@@ -1230,9 +1290,9 @@ function prepare_Data()
         elseif !build_grm
             KIN = nothing
         else
-            println_to_file(string("\t* '--genotype' or '--grm' must be specified for analysis!"), log_file)
+            println_to_file(string("    * '--genotype' or '--grm' must be specified for analysis!"), log_file)
         end
-        println_to_file(string("\tElapsed time: ", elapsed_time, " seconds"), log_file)
+        println_to_file(string("    Elapsed time: ", elapsed_time, " seconds"), log_file)
     end
     GC.gc()
     if _args_run_mode != "xbirg"

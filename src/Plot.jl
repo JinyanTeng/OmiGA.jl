@@ -48,8 +48,8 @@ function runOmiGA_plot(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
         CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".pheno_val.plot.txt.gz")), subPHENO_df, delim="\t", compress=true)
         CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".pheno_adj.plot.txt.gz")), subPHENO_residuals_df, delim="\t", compress=true)
     end
-    println_to_file(string("\t* DONE."), log_file)
-    println_to_file(string("\t* Calculating Pearson's r of variants for local Manhattan plot ..."), log_file)
+    println_to_file(string(" * DONE."), log_file)
+    println_to_file(string(" * Calculating Pearson's r of variants for local Manhattan plot ..."), log_file)
     chroms = intersect(unique(pheno_subannot.chrom), unique(snp_annotation.chromosome))
     for ch in chroms
         is_append = ch != chroms[1]
@@ -77,6 +77,6 @@ function runOmiGA_plot(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
         end
         CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".snpr.plot.txt.gz")), _df_snpr, delim="\t", compress=true, append=is_append)
     end
-    println_to_file(string("\t* DONE."), log_file)
+    println_to_file(string(" * DONE."), log_file)
     println_to_file(string("+++ Total elapsed time (h:m:s:ms): ", format_milliseconds(now() - time_start)), log_file)
 end

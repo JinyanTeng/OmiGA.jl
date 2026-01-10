@@ -1,3 +1,139 @@
+function read_qtl_pairs_file(fn::String)
+    if endswith(fn, r".txt|.txt.gz")
+        return CSV.File(fn) |> DataFrame
+    elseif endswith(fn, r".jld2|.jld")
+        return JLD2.load(fn)["data"]
+    elseif endswith(fn, "arrow")
+        return Arrow.Table(fn) |> DataFrame
+    else
+        error("Unknown file type.")
+    end
+end
+function write_qtl_pairs_file(fn::String, dt::DataFrame, compress::Bool; compress_algo::Symbol=:zstd)
+    if endswith(fn, r".txt|.txt.gz")
+        CSV.write(fn, dt, delim="\t", compress=compress)
+    elseif endswith(fn, r".jld2|.jld")
+        JLD2.save(fn, "data", dt)
+    elseif endswith(fn, "arrow")
+        if compress
+            Arrow.write(fn, dt, compress=compress_algo)
+        else
+            Arrow.write(fn, dt)
+        end
+    else
+        error("Unknown file type.")
+    end
+end
+function write_qtl_pairs_file(fn::String, dt::DataFrame; format::Union{String, Nothing}=nothing)
+    if endswith(fn, r".txt")
+        CSV.write(fn, dt, delim="\t")
+    elseif endswith(fn, r".txt.gz")
+        CSV.write(fn, dt, delim="\t", compress=true)
+    elseif endswith(fn, r".jld2|.jld")
+        if isnothing(format) || format in ["jld","jld2"]
+            JLD2.save(fn, "data", dt)
+        elseif format in ["jld_compress","jld2_compress"]
+            JLD2.save(fn, "data", dt; compress=true)
+        end
+    elseif endswith(fn, "arrow")
+        if isnothing(format) || format == "arrow"
+            Arrow.write(fn, dt)
+        elseif format == "arrow_zstd"
+            Arrow.write(fn, dt, compress=:zstd)
+        elseif format == "arrow_lz4"
+            Arrow.write(fn, dt, compress=:lz4)
+        end
+    else
+        error("Unknown file type.")
+    end
+end
+function json_write(fn::AbstractString, data)
+    open(fn, "w") do f
+        JSON.print(f, data, 2)  
+    end
+end
+function nanmaximum(arr)
+    filtered = filter(!isnan, arr)
+    isempty(filtered) ? NaN : maximum(filtered)
+end
+function nanminimum(arr)
+    filtered = filter(!isnan, arr)
+    isempty(filtered) ? NaN : minimum(filtered)
+end
+function find_closest_below_fast(vec::AbstractVector{T}, target::T) where T
+    closest_val = -Inf
+    found = false
+    i = 0
+    final_i = -1
+    if issorted(vec)
+        for x in vec
+            i += 1
+            if x <= target && x > closest_val
+                closest_val = x
+                found = true
+                final_i = i
+            else
+                break
+            end
+        end
+    else
+        for x in vec
+            i += 1
+            if x <= target && x > closest_val
+                closest_val = x
+                found = true
+                final_i = i
+            end
+        end
+    end
+    return final_i
+end
+function find_closest_up_fast(vec::AbstractVector{T}, target::T) where T
+    closest_val = Inf
+    found = false
+    i = 0
+    final_i = -1
+    if issorted(vec)
+        for x in vec
+            i += 1
+            if x >= target && x < closest_val
+                closest_val = x
+                found = true
+                final_i = i
+            else
+                break
+            end
+        end
+    else
+        for x in vec
+            i += 1
+            if x >= target && x < closest_val
+                closest_val = x
+                found = true
+                final_i = i
+            end
+        end
+    end
+    return final_i
+end
+function find_closest_below_fast(df::DataFrame, target::T) where T
+    pids = unique(df.pheno_id)
+    df_pval_threshold_acat = DataFrame(pheno_id = pids, pval_threshold = NaN)
+    @threads for i in 1:length(pids)
+        useidx = df.pheno_id .== pids[i]
+        good_i = find_closest_below_fast(df.cutoff_acatp[useidx], target)
+        if good_i == -1
+            continue
+        else
+            if sum(useidx) > good_i
+                df_pval_threshold_acat.pval_threshold[i] = sqrt(df.cutoff_pval[useidx][good_i] * df.cutoff_pval[useidx][good_i + 1])
+            else
+                df_pval_threshold_acat.pval_threshold[i] = df.cutoff_pval[useidx][good_i] + 1e-10
+            end
+        end
+    end
+    return df_pval_threshold_acat
+end
 function runBE(X::AbstractMatrix{T}; B::Int=20, alpha::Float64=0.05, verbose::Bool=false) where T
     @assert alpha >= 0 && alpha <= 1 "alpha must be between 0 and 1."
     n = size(X, 1)  
@@ -431,8 +567,7 @@ function format_milliseconds(milliseconds::Millisecond)
     return string(hours, ":", minutes, ":", seconds, ":", milliseconds)
 end
 function vmatch(S, V; rm_nothing=false)
-    idx = [findfirst(isequal(x), S) for x in V]
-    idx = Vector{Union{Nothing,Int}}(idx)
+    idx = indexin(V, S)
     if rm_nothing
         idx = idx[.~isnothing.(idx)] |> Vector{Int}
     end
@@ -621,7 +756,7 @@ function readPlinkBed(prefix::String; type::Type=Int8, model=ADDITIVE_MODEL, cen
     if !byrow
         bed = bed'
     end
-    bim = CSV.read(string(prefix, ".bim"), DataFrame, header=false, buffer_in_memory=true, types=Dict(1 => String, 2 => String, 3 => Float64, 4 => Int, 5 => String, 6 => String))
+    bim = CSV.read(string(prefix, ".bim"), DataFrame, header=false, buffer_in_memory=!_args_low_mem, types=Dict(1 => String, 2 => String, 3 => Float64, 4 => Int, 5 => String, 6 => String))
     rename!(bim, ["chromosome", "variant", "cM", "position", "a1", "a2"])
     fam = CSV.read(string(prefix, ".fam"), DataFrame, header=false, buffer_in_memory=true, types=Dict(1 => String, 2 => String))
     FID = string.(fam[:, 1])::Vector{String}
@@ -645,7 +780,7 @@ function readPlinkBed(prefix::String, dominance::Bool, byrow::Bool)
         geno_DOM = copy(bed)
         replace!(geno_DOM, 0x02 => 0x00) 
     end
-    bim = CSV.read(string(prefix, ".bim"), DataFrame, header=false, buffer_in_memory=true, types=Dict(1 => String, 2 => String, 3 => Float64, 4 => Int, 5 => String, 6 => String))
+    bim = CSV.read(string(prefix, ".bim"), DataFrame, header=false, buffer_in_memory=!_args_low_mem, types=Dict(1 => String, 2 => String, 3 => Float64, 4 => Int, 5 => String, 6 => String))
     rename!(bim, ["chromosome", "variant", "cM", "position", "a1", "a2"])
     fam = CSV.read(string(prefix, ".fam"), DataFrame, header=false, buffer_in_memory=true, types=Dict(1 => String, 2 => String))
     FID = string.(fam[:, 1])::Vector{String}

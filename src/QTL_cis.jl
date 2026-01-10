@@ -1,6 +1,6 @@
 function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _struct_PRIOR_HerB; _struct_DOM::Union{Nothing,Dominance}=nothing, _struct_ITERM::Union{Nothing,InteractionTerm}=nothing)
     phenotype = _struct_PHENO.phenotype
-    pheno_annotation = _struct_PHENO.annotation
+    pheno_annotation = _struct_PHENO.annotation 
     X_MME = _struct_COVAR.X_MME
     @runif USE_GPU & _args_linear_model X_MME = X_MME |> CuArray
     if !isnothing(_struct_PRIOR_HerB)
@@ -14,6 +14,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
     qtl_map_algo = _args_qtl_map_algo
     _n_samples = _struct_GENO.n_samples
     _n, _X_c = size(X_MME)
+    with_strand = issubset(["strand"], names(pheno_annotation))
     test_phen_type = "raw" 
     test_geno_type = "raw" 
     perm_phen_type = "raw" 
@@ -142,9 +143,28 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
         df_subs = fill(NAN, 5, 3 * n_tests + 2)
     end
     with_group = !isnothing(_args_pheno_group_file)
-    calcu_variant_threshold = _args_calcu_variant_threshold
-    multiple_testing_method = isnothing(_args_multiple_testing) ? "acat" : _args_multiple_testing 
+    @runif with_group println_to_file(string(" * A group annotation file was specified for the cis-QTL analysis."), log_file)
+    calcu_variant_threshold = true
+    if !with_group
+        multiple_testing_method = isnothing(_args_multiple_testing) ? "acat" : _args_multiple_testing 
+    else
+        multiple_testing_method = isnothing(_args_multiple_testing) ? "acat2" : _args_multiple_testing 
+    end
+    if multiple_testing_method == "acat2"
+        multiple_testing_method = "acat"
+        use_acat2 = true
+    else
+        use_acat2 = false
+    end
+    if multiple_testing_method == "acat"
+        use_acat2 = true
+    end
     println_to_file(string(" * MultipleTesting method: ", multiple_testing_method), log_file)
+    if multiple_testing_method == "acat"
+        @runif with_group && !use_acat2 println_to_file(string(" * The ACAT test for each phenotype group is performed using the minimum p-values of variants across phenotypes within that group."), log_file)
+        @runif with_group && !use_acat2 println_to_file(string(" * Recommend using the nested ACAT test for each phenotype group by specifying '--multiple-testing acat2' or keeping default option."), log_file)
+        @runif with_group && use_acat2 println_to_file(string(" * Use nested ACAT test for each phenotype group."), log_file)
+    end
     n_perms = _args_n_perms
     nominal_only = _args_nominal_only
     if multiple_testing_method == "acat"
@@ -165,6 +185,10 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
         permutation_method = multiple_testing_method
         println_to_file(string(" * The variant-level nominal P-value threshold for each phenotype will not be computed. If you want to compute it, please specify the flag '--calcu-variant-threshold'."), log_file)
     end
+        if multiple_testing_method == "acat" && calcu_variant_threshold
+            permutation_method = nothing
+            nominal_only = true
+        end
     if !nominal_only
         if isnothing(permutation_method)
             if n_tests == 1
@@ -223,6 +247,9 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
     end
     df_perm = DataFrame()
     df_tops = DataFrame()
+    df_tops_detail = DataFrame()
+    df_test_gene_annot = DataFrame()
+    list_full_summary_files = String[]
     pheno_annotation.index = 1:nrow(pheno_annotation)
     chroms = intersect(string.(unique(pheno_annotation.chrom)), string.(unique(snp_annotation.chromosome)))
     if length(chroms) == 0
@@ -322,13 +349,16 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
         _gene_annot = pheno_annotation[chunk_map.chunk_phenotype[chid], :]
         _snp_annot = snp_annotation[snp_index_chunk, :]
         _snp_annot.reindex = USE_Float32 ? Int32.(1:size(_snp_annot, 1)) : 1:size(_snp_annot, 1)
-        _gene_snps = [get_cis_snp_info(_gene_annot, _snp_annot, gene, _args_cis_window; nsnp_only=true) for gene in _gene_annot.pheno_id]
+        _gene_snps = [get_cis_snp_info(_gene_annot, _snp_annot, gene, _args_cis_window; nsnp_only=true, window_type=_args_window_type) for gene in _gene_annot.pheno_id]
         _gene_annot = _gene_annot[_gene_snps.>0, :]
         _gene_snps = _gene_snps[_gene_snps.>0]
-        _n_genes = length(_gene_annot.pheno_id) 
+        _n_phenos = length(_gene_annot.pheno_id) 
         _gene_end_index = accumulate(+, _gene_snps)
         _gene_start_index = _gene_end_index[1:end-1] .+ 1
         prepend!(_gene_start_index, 1)
+        _gene_annot.summary_start=_gene_start_index
+        _gene_annot.summary_end=_gene_end_index
+        append!(df_test_gene_annot, _gene_annot)
         _group_annot = nothing
         if issubset(["group_id_first"], names(_gene_annot))
             _group_annot = _gene_annot[_gene_annot.group_id_first, :]
@@ -343,6 +373,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             cis_g2_std = nothing
             _group_start_index = nothing
             _group_end_index = nothing
+            top_absr_exper_group = nothing
         end
         @timeit to "Prepare for nominal" begin
             nrow_df_full = sum(_gene_snps)
@@ -355,6 +386,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                 "beta_se_g1" => NAN,
                 "pval_g1" => NaN,
             ])
+            @runif with_strand insertcols!(df_full, "start_distance", "end_distance" => 0, after=true)
             _df_tops = DataFrame(chrom=_gene_annot.chrom,
                 pheno_id=_gene_annot.pheno_id,
                 num_var=_gene_snps,
@@ -365,8 +397,9 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                 beta_se_g1=NAN,
                 pval_g1=NaN,
             )
+            @runif with_strand insertcols!(_df_tops, "start_distance", "end_distance" => 0, after=true)
             if with_group
-                insertcols!(_df_tops, 2, "group_id" => _gene_annot.group_id)
+                insertcols!(_df_tops, "chrom", "group_id" => _gene_annot.group_id, after=true)
                 _df_tops_group = DataFrame(
                     chrom=chrom,
                     group_id=unique(_gene_annot.group_id),
@@ -380,6 +413,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                     beta_se_g1=NAN,
                     pval_g1=NaN,
                 )
+                @runif with_strand insertcols!(_df_tops, "start_distance", "end_distance" => 0, after=true)
             end
             chunk_genotype = Matrix{FloatT}(undef, (_n_samples, length(snp_index_chunk)))
             if !USE_GPU
@@ -394,8 +428,8 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
         end
         @timeit to "Prepare for 1 assoc" if n_tests == 1
             @runif calcu_variant_threshold _df_tops.pval_g1_threshold .= NaN
-            @runif multiple_testing_method == "acat" _df_tops.pval_g1_acat .= NaN
-            @runif !nominal_only _df_perm = hcat(DataFrame(pheno_id=_gene_annot.pheno_id, chrom=chrom), DataFrame(Dict(Symbol(lpad(i, 5, '0')) => repeat([NAN], _n_genes) for i in 1:(n_tests*(n_perms+1)))))
+            @runif multiple_testing_method == "acat" _df_tops.pval_g1_pheno .= NaN
+            @runif !nominal_only _df_perm = hcat(DataFrame(pheno_id=_gene_annot.pheno_id, chrom=chrom), DataFrame(Dict(Symbol(lpad(i, 5, '0')) => repeat([NAN], _n_phenos) for i in 1:(n_tests*(n_perms+1)))))
             @runif !nominal_only rename!(_df_perm, ["pheno_id", "chrom", string.("X", 1:(n_tests*(n_perms+1)))...])
             @timeit to "Prepare chunk_g" if !USE_GPU
                 chunk_genotype .= genotype[:, snp_index_chunk]
@@ -454,8 +488,8 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             _df_tops.beta_se_g2 .= NAN
             _df_tops.pval_g2 .= NaN
             @runif calcu_variant_threshold _df_tops.pval_g2_threshold .= NaN
-            @runif multiple_testing_method == "acat" _df_tops.pval_g2_acat .= NaN
-            @runif !nominal_only _df_perm = hcat(DataFrame(pheno_id=_gene_annot.pheno_id, chrom=chrom), DataFrame(Dict(Symbol(lpad(i, 5, '0')) => repeat([NAN], _n_genes) for i in 1:((n_tests+1)*(n_perms+1)))))
+            @runif multiple_testing_method == "acat" _df_tops.pval_g2_pheno .= NaN
+            @runif !nominal_only _df_perm = hcat(DataFrame(pheno_id=_gene_annot.pheno_id, chrom=chrom), DataFrame(Dict(Symbol(lpad(i, 5, '0')) => repeat([NAN], _n_phenos) for i in 1:((n_tests+1)*(n_perms+1)))))
             @runif !nominal_only rename!(_df_perm, ["pheno_id", "chrom", string.("X", 1:((n_tests+1)*(n_perms+1)))...])
             if with_group
                 if n_tests == 2
@@ -503,7 +537,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             end
             df_full.pval_joint .= NaN
             _df_tops.pval_joint .= NaN
-            @runif multiple_testing_method == "acat" _df_tops.pval_joint_acat .= NaN
+            @runif multiple_testing_method == "acat" _df_tops.pval_joint_pheno .= NaN
             chunk_genotype .= genotype[:, snp_index_chunk]
             chunk_genotype .-= _2p
             if _args_run_mode == "cis" 
@@ -530,11 +564,14 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             end
         end
         if with_group
-            @runif !nominal_only _df_tops_group[:, ["pval_g1_threshold", "pval_g2_threshold"][n_tests]] .= NaN
+            @runif calcu_variant_threshold _df_tops_group[:, ["pval_g1_threshold", "pval_g2_threshold"][n_tests]] .= NaN
             _n_groups = size(_df_tops_group, 1)
             @runif !nominal_only _df_perm_group = hcat(DataFrame(group_id=unique(_gene_annot.group_id), chrom=chrom), DataFrame(Dict(Symbol(lpad(i, 5, '0')) => repeat([NAN], _n_groups) for i in 1:((n_tests+(1*(n_tests-1)))*(n_perms+1)))))
             @runif !nominal_only rename!(_df_perm_group, ["group_id", "chrom", string.("X", 1:((n_tests+(1*(n_tests-1)))*(n_perms+1)))...])
-            @runif multiple_testing_method == "acat" _df_tops_group[:, ["pval_g1_acat", "pval_g2_acat"][n_tests]] .= NaN
+            _df_tops_group[:, ["pval_g1_group", "pval_g2_group"][n_tests]] .= NaN
+            _df_tops_group_assigned_colnames = intersect(names(_df_tops_group), names(_df_tops))[3:end]
+            _df_tops_group_assigned_indices = findall(names(_df_tops_group) .∈ (_df_tops_group_assigned_colnames,))
+            _df_tops_assigned_indices = findall(names(_df_tops) .∈ (_df_tops_group_assigned_colnames,))
         end
         @runif multiple_testing_method == "beta_approx" begin
             _df_tops.pval_beta .= NaN
@@ -571,9 +608,9 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             end
         end
         GC.gc()
-        for i in 1:_n_genes
+        for i in 1:_n_phenos
             gene = _gene_annot.pheno_id[i]
-            println_to_file(string("    PHENO: ", i, "/", _n_genes, " <", gene,">"), log_file)
+            println_to_file(string("    PHENO: ", i, "/", _n_phenos, " <", gene,">"), log_file)
             if test_phen_type == "residualized"
                 if !USE_GPU
                     testpheno = chunk_phenotype_res[:, i]
@@ -592,7 +629,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                     testpheno = vec(phenotype[:, pheno_index]) |> CuArray
                 end
             end
-            @timeit to "Keep SNPs within cis-region" cissnps_annot, n_cis_snps = get_cis_snp_info(_gene_annot, _snp_annot, gene, _args_cis_window)
+            @timeit to "Keep SNPs within cis-region" cissnps_annot, n_cis_snps = get_cis_snp_info(_gene_annot, _snp_annot, gene, _args_cis_window; window_type=_args_window_type)
             if with_group 
                 is_pre_data = _gene_annot.group_id_first[i]
             else
@@ -857,6 +894,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                 df_full.pheno_id[_df_full_index] .= gene
                 df_full.variant_id[_df_full_index] .= cissnps_annot.variant
                 df_full.start_distance[_df_full_index] .= cissnps_annot.start_distance
+                @runif with_strand df_full.end_distance[_df_full_index] .= cissnps_annot.end_distance
                 if USE_GPU
                     df_full.af[_df_full_index] .= cissnps_annot.af |> Array
                 else
@@ -899,74 +937,73 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                     else
                         df_full[_df_full_index, pval_cols_indices] .= ccdf(WaldTest(1, DOF - 1), df_test[:, 3:3:n_tests*3])
                     end
-                    @timeit to "4" @inbounds @threads for bb in 1:length(_df_full_index)
+                    @timeit to "4" @inbounds @threads for bb in eachindex(_df_full_index)
                         df_full.pval_joint[_df_full_index[bb]] = ACATest(df_full[_df_full_index[bb], pval_cols_indices] |> Vector; is_check=false)
                     end
                 end
             end
-            @runif !nominal_only @timeit to "Permutation" if n_tests == 1
-                @timeit to "Perm 1.0" begin
-                    Ainds = CartesianIndices(cis_genotype)
-                    Binds = CartesianIndices((1:size(chunk_genotype_res, 1), minimum(cissnps_annot.reindex):maximum(cissnps_annot.reindex)))
-                    copyto!(cis_genotype, Ainds, chunk_genotype_res, Binds)
+            top_absr_exper = append_top_summary!(df_full[_df_full_index, :], _df_tops, i, n_tests, DOF) 
+            if !with_group
+                @runif !nominal_only @timeit to "Permutation" if n_tests == 1 
+                    @timeit to "Perm 1.0" begin
+                        Ainds = CartesianIndices(cis_genotype)
+                        Binds = CartesianIndices((1:size(chunk_genotype_res, 1), minimum(cissnps_annot.reindex):maximum(cissnps_annot.reindex)))
+                        copyto!(cis_genotype, Ainds, chunk_genotype_res, Binds)
+                    end
+                    @timeit to "Perm clipper" if permutation_method == "clipper"
+                        permpheno = chunk_phenotype_res[:, i]
+                        pval_nominal_threshold = cis_permutation_one_assoc!("clipper", permpheno, nothing, cis_genotype, absr_perm, DOF, fdr=FloatT(_args_fdr))
+                        _df_perm[i, 3:end] .= [top_absr_exper; absr_perm]
+                    end
+                    @timeit to "Perm standard_fast" if permutation_method == "standard_fast"
+                        permpheno = phenotype[:, pheno_index]
+                        pval_nominal_threshold = cis_permutation_one_assoc!("standard_fast", permpheno, Q, cis_genotype, absr_perm, DOF; y_perms=y_perms, fdr=FloatT(_args_fdr))
+                        _df_perm[i, 3:end] .= [top_absr_exper; absr_perm]
+                    end
+                    _df_tops.pval_g1_threshold[i] = pval_nominal_threshold
+                elseif (n_tests == 2) & (_args_run_mode == "cis")
+                    if permutation_method == "standard"
+                        permpheno = phenotype[:, pheno_index]
+                        cis_permutation_two_assoc!("standard", i, permpheno, cis_genotype, cis_genotype_2nd, _df_perm, _df_tops, df_full[_df_full_index, :], y_perms, cissnps_annot; X_MME=nothing, Xt_X=nothing, glo_EA=glo_EA, chunk_xtx_SQt_xQ=chunk_xtx_SQt_xQ, chunk_xtx_SQ2t_xQ=chunk_xtx_SQ2t_xQ, xW0=xW0, xty_init=xty_init, xtx_init=xtx_init, fdr=FloatT(_args_fdr))
+                    elseif permutation_method == "standard_fast"
+                        Ainds = CartesianIndices(cis_genotype_2nd)
+                        Binds = CartesianIndices((1:size(chunk_SQ2_pcc, 1), minimum(cissnps_annot.reindex):maximum(cissnps_annot.reindex)))
+                        copyto!(cis_genotype_2nd, Ainds, chunk_SQ2_pcc, Binds)
+                        permpheno = phenotype[:, pheno_index] 
+                        cis_permutation_two_assoc!("standard_fast", i, permpheno, cis_genotype, cis_genotype_2nd, _df_perm, _df_tops, df_full[_df_full_index, :], y_perms, cissnps_annot, stat_perm; X_MME=X_MME, Xt_X=Xt_X, fdr=FloatT(_args_fdr))
+                    end
+                elseif (n_tests == 2) & (_args_run_mode == "cis_interaction")
+                    if permutation_method == "standard"
+                        permpheno = phenotype[:, pheno_index]
+                        pval_nominal_threshold = cis_permutation_two_assoc!("standard", permpheno, cis_genotype, cis_genotype_iterm, y_perms, cissnps_annot, stat_perm; X_MME=nothing, Xt_X=nothing, glo_EA=glo_EA, chunk_xtx_SQt_xQ=chunk_xtx_SQt_xQ, chunk_xtx_SQ2t_xQ=chunk_xtx_SQ2t_xQ, xW0=xW0, xty_init=xty_init, xtx_init=xtx_init, fdr=FloatT(_args_fdr))
+                        _df_perm[i, 3:end] .= [NAN; top_absr_exper; NAN; stat_perm]
+                    elseif permutation_method == "standard_fast"
+                        Ainds = CartesianIndices(cis_genotype_iterm)
+                        Binds = CartesianIndices((1:size(chunk_SQ2_pcc, 1), minimum(cissnps_annot.reindex):maximum(cissnps_annot.reindex)))
+                        copyto!(cis_genotype_iterm, Ainds, chunk_SQ2_pcc, Binds)
+                        permpheno = phenotype[:, pheno_index] 
+                        pval_nominal_threshold = cis_permutation_two_assoc!("standard_fast", permpheno, cis_genotype, cis_genotype_iterm, y_perms, cissnps_annot, stat_perm; X_MME=X_MME, Xt_X=Xt_X, fdr=FloatT(_args_fdr))
+                        _df_perm[i, 3:end] .= [NAN; top_absr_exper; NAN; stat_perm]
+                    end
+                    _df_tops.pval_g2_threshold[i] = pval_nominal_threshold
+                else
+                    error("!")
                 end
-                @timeit to "Perm clipper" if permutation_method == "clipper"
-                    permpheno = chunk_phenotype_res[:, i]
-                    cis_permutation_one_assoc!("clipper", i, permpheno, nothing, cis_genotype, absr_perm, _df_perm, _df_tops, df_full[_df_full_index, :], DOF, fdr=FloatT(_args_fdr))
-                end
-                @timeit to "Perm standard_fast" if permutation_method == "standard_fast"
-                    permpheno = phenotype[:, pheno_index]
-                    cis_permutation_one_assoc!("standard_fast", i, permpheno, Q, cis_genotype, absr_perm, _df_perm, _df_tops, df_full[_df_full_index, :], DOF; y_perms=y_perms, fdr=FloatT(_args_fdr))
-                end
-            elseif (n_tests == 2) & (_args_run_mode == "cis")
-                if permutation_method == "standard"
-                    permpheno = phenotype[:, pheno_index]
-                    cis_permutation_two_assoc!("standard", i, permpheno, cis_genotype, cis_genotype_2nd, _df_perm, _df_tops, df_full[_df_full_index, :], y_perms, cissnps_annot;
-                        X_MME=nothing, Xt_X=nothing, glo_EA=glo_EA, chunk_xtx_SQt_xQ=chunk_xtx_SQt_xQ, chunk_xtx_SQ2t_xQ=chunk_xtx_SQ2t_xQ, xW0=xW0, xty_init=xty_init,
-                        xtx_init=xtx_init, fdr=FloatT(_args_fdr))
-                elseif permutation_method == "standard_fast"
-                    Ainds = CartesianIndices(cis_genotype_2nd)
-                    Binds = CartesianIndices((1:size(chunk_SQ2_pcc, 1), minimum(cissnps_annot.reindex):maximum(cissnps_annot.reindex)))
-                    copyto!(cis_genotype_2nd, Ainds, chunk_SQ2_pcc, Binds)
-                    permpheno = phenotype[:, pheno_index] 
-                    cis_permutation_two_assoc!("standard_fast", i, permpheno, cis_genotype, cis_genotype_2nd, _df_perm, _df_tops, df_full[_df_full_index, :], y_perms, cissnps_annot, stat_perm; X_MME=X_MME, Xt_X=Xt_X, fdr=FloatT(_args_fdr))
-                end
-            elseif (n_tests == 2) & (_args_run_mode == "cis_interaction")
-                if permutation_method == "standard"
-                    permpheno = phenotype[:, pheno_index]
-                    cis_permutation_two_assoc!("standard", i, permpheno, cis_genotype, cis_genotype_iterm, _df_perm, _df_tops, df_full[_df_full_index, :], y_perms, cissnps_annot;
-                        X_MME=nothing, Xt_X=nothing, glo_EA=glo_EA, chunk_xtx_SQt_xQ=chunk_xtx_SQt_xQ, chunk_xtx_SQ2t_xQ=chunk_xtx_SQ2t_xQ, xW0=xW0, xty_init=xty_init,
-                        xtx_init=xtx_init, fdr=FloatT(_args_fdr))
-                elseif permutation_method == "standard_fast"
-                    Ainds = CartesianIndices(cis_genotype_iterm)
-                    Binds = CartesianIndices((1:size(chunk_SQ2_pcc, 1), minimum(cissnps_annot.reindex):maximum(cissnps_annot.reindex)))
-                    copyto!(cis_genotype_iterm, Ainds, chunk_SQ2_pcc, Binds)
-                    permpheno = phenotype[:, pheno_index] 
-                    cis_permutation_two_assoc!("standard_fast", i, permpheno, cis_genotype, cis_genotype_iterm, _df_perm, _df_tops, df_full[_df_full_index, :], y_perms, cissnps_annot, stat_perm; X_MME=X_MME, Xt_X=Xt_X, fdr=FloatT(_args_fdr))
-                end
-            else
-                error("!")
             end
             @timeit to "ACATest" if multiple_testing_method == "acat"
-                @runif !calcu_variant_threshold append_top_summary!(df_full[_df_full_index, :], _df_tops, i, n_tests)
                 if n_tests > 2
                     pvals_for_acat = df_full[_df_full_index, "pval_joint"]
                 else
                     pvals_for_acat = df_full[_df_full_index, ["pval_g1", "pval_g2"][n_tests]]
                 end
-                kept_non_nan_indices = .!isnan.(pvals_for_acat)
-                if sum(kept_non_nan_indices) == 0
-                    @runif _args_verbose println_to_file(string(" * [SKIP] There are not non-NaN values for ACAT test."), log_file)
-                    continue
-                end
                 if _args_dtss_weight
                     exp_weight_val = 5e-6
-                    _df_tops[i, ["pval_g1_acat", "pval_g2_acat"][n_tests]] = ACATest(pvals_for_acat[kept_non_nan_indices]; Weights=exp.(.-abs.(exp_weight_val * df_full.start_distance[_df_full_index])), is_check=false)
+                    _df_tops[i, ["pval_g1_pheno", "pval_g2_pheno"][n_tests]] = ACATest(pvals_for_acat; Weights=exp.(.-abs.(exp_weight_val * df_full.start_distance[_df_full_index])), is_check=false)
                 else
                     if n_tests > 2
-                        _df_tops.pval_joint_acat[i] = ACATest(pvals_for_acat[kept_non_nan_indices]; is_check=false)
+                        _df_tops.pval_joint_pheno[i] = ACATest(pvals_for_acat; is_check=false)
                     else
-                        _df_tops[i, ["pval_g1_acat", "pval_g2_acat"][n_tests]] = ACATest(pvals_for_acat[kept_non_nan_indices]; is_check=false)
+                        _df_tops[i, ["pval_g1_pheno", "pval_g2_pheno"][n_tests]] = ACATest(pvals_for_acat; is_check=false)
                     end
                 end
             end
@@ -982,20 +1019,24 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             end
             if with_group
                 if _gene_annot.group_id_first[i]
+                    top_absr_exper_group = top_absr_exper
                     _group_start_index = _gene_start_index[i]
+                else
+                    if top_absr_exper > top_absr_exper_group
+                        top_absr_exper_group = top_absr_exper
+                    end
                 end
                 if _gene_annot.group_id_last[i]
                     gid = _gene_annot.group_id[i]
-                    _group_i = findfirst(_df_perm_group.group_id .== gid)
+                    _group_i = findfirst(_df_tops_group.group_id .== gid)
                     _group_end_index = _gene_end_index[i]
                     group_size = _group_annot.group_size[findfirst(_group_annot.group_id .== _gene_annot.group_id[i])]
                     group_pheno_indices = _gene_annot.index[_gene_annot.group_id.==gid]
                     _pval_group = reshape(df_full[:, ["pval_g1", "pval_g2"][n_tests]][_group_start_index:_group_end_index], :, group_size)
-                    _pval_group_min_indices = [argmin(x) for x in eachrow(_pval_group)]
                     best_grpi = argmin(_df_tops[_df_tops.group_id.==gid, ["pval_g1", "pval_g2"][n_tests]])
-                    _df_tops_group[_group_i, 4:end-1] = _df_tops[_df_tops.group_id.==gid, :][best_grpi, 3:end-1]
-                    best_pheno_id = _df_tops_group.pheno_id[findfirst(_df_tops_group.group_id .== gid)]
+                    _df_tops_group[_group_i, _df_tops_group_assigned_indices] = _df_tops[_df_tops.group_id.==gid, _df_tops_assigned_indices][best_grpi, :]
                     @runif !nominal_only begin
+                        _pval_group_min_indices = [argmin(x) for x in eachrow(_pval_group)]
                         perm_r_mat = fill(NAN, n_perms, length(_pval_group_min_indices))
                         for _grpi in 1:group_size
                             pheno_index = group_pheno_indices[_grpi]
@@ -1008,11 +1049,11 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                                 end
                                 @timeit to "Perm clipper" if permutation_method == "clipper"
                                     permpheno = chunk_phenotype_res[:, i]
-                                    perm_r_mat[:, variant_subset_indices] = cis_permutation_one_assoc!("clipper", i, permpheno, nothing, cis_genotype, absr_perm, _df_perm, _df_tops, df_full[_df_full_index, :], DOF, fdr=FloatT(_args_fdr), variant_subset_index=variant_subset_indices)
+                                    perm_r_mat[:, variant_subset_indices] = cis_permutation_one_assoc!("clipper", permpheno, cis_genotype, absr_perm, variant_subset_indices; Q=nothing, y_perms=nothing)
                                 end
                                 @timeit to "Perm standard_fast" if permutation_method == "standard_fast"
                                     permpheno = phenotype[:, pheno_index]
-                                    perm_r_mat[:, variant_subset_indices] = cis_permutation_one_assoc!("standard_fast", i, permpheno, Q, cis_genotype, absr_perm, _df_perm, _df_tops, df_full[_df_full_index, :], DOF; y_perms=y_perms, fdr=FloatT(_args_fdr), variant_subset_index=variant_subset_indices)
+                                    perm_r_mat[:, variant_subset_indices] = cis_permutation_one_assoc!("standard_fast", permpheno, cis_genotype, absr_perm, variant_subset_indices; Q=Q, y_perms=y_perms)
                                 end
                             elseif (n_tests == 2) & (_args_run_mode == "cis")
                                 if permutation_method == "standard"
@@ -1038,7 +1079,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                                     Binds = CartesianIndices((1:size(chunk_SQ2_pcc, 1), minimum(cissnps_annot.reindex):maximum(cissnps_annot.reindex)))
                                     copyto!(cis_genotype_iterm, Ainds, chunk_SQ2_pcc, Binds)
                                     permpheno = phenotype[:, pheno_index] 
-                                    perm_r_mat[:, variant_subset_indices] = cis_permutation_two_assoc!("standard_fast", i, permpheno, cis_genotype, cis_genotype_iterm, _df_perm, _df_tops, df_full[_df_full_index, :], y_perms, cissnps_annot, stat_perm; X_MME=X_MME, Xt_X=Xt_X, fdr=FloatT(_args_fdr), variant_subset_index=variant_subset_indices)
+                                    perm_r_mat[:, variant_subset_indices] = cis_permutation_two_assoc!("standard_fast", permpheno, cis_genotype_iterm, y_perms, X_MME, Xt_X, variant_subset_indices)
                                 end
                             else
                                 error("!")
@@ -1046,20 +1087,27 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                         end
                         if n_tests == 1
                             absr_perm .= vec(maximum(abs, perm_r_mat, dims=2))
-                            absr_exper = _df_perm[findfirst(_df_perm.pheno_id .== best_pheno_id), 3]
-                            _df_perm_group[_group_i, 3:end] .= [absr_exper; absr_perm]
-                            pval_nominal_threshold = sort(get_approx_p_from_r(absr_perm, DOF - 1))[ceil(Int, n_perms * _args_fdr)]
+                            _df_perm_group[_group_i, 3:end] .= [top_absr_exper_group; absr_perm] 
+                            pval_nominal_threshold = get_approx_p_from_r(sort!(absr_perm; rev=true)[ceil(Int, n_perms * _args_fdr)], DOF)
                         elseif n_tests == 2
                             stat_perm[2:3:length(stat_perm)] .= vec(maximum(abs, perm_r_mat, dims=2))
-                            r_g1, r_g2, r_g12 = _df_perm[findfirst(_df_perm.pheno_id .== best_pheno_id), 3:5]
-                            _df_perm_group[_group_i, 3:end] .= [r_g1; r_g2; r_g12; stat_perm]
-                            pval_nominal_threshold = sort(get_approx_p_from_r(stat_perm[2:3:length(stat_perm)], DOF - 1))[ceil(Int, n_perms * _args_fdr)]
+                            _df_perm_group[_group_i, 3:end] .= [NAN; top_absr_exper_group; NAN; stat_perm]
+                            pval_nominal_threshold = get_approx_p_from_r(sort(stat_perm[2:3:length(stat_perm)]; rev=true)[ceil(Int, n_perms * _args_fdr)], DOF - 1)
                         end
+                        top_absr_exper_group = nothing
                         _df_tops_group[_group_i, ["pval_g1_threshold", "pval_g2_threshold"][n_tests]] = pval_nominal_threshold
                     end
                     if multiple_testing_method == "acat"
-                        best_p_group_for_acat = vec(minimum(_pval_group, dims=2)) 
-                        _df_tops_group[_group_i, ["pval_g1_acat", "pval_g2_acat"][n_tests]] = ACATest(best_p_group_for_acat; is_check=false)
+                        if !use_acat2
+                            best_p_group_for_acat = vec(minimum(_pval_group, dims=2)) 
+                            _df_tops_group[_group_i, ["pval_g1_group", "pval_g2_group"][n_tests]] = ACATest(best_p_group_for_acat; is_check=false)
+                        elseif use_acat2
+                            if group_size == 1
+                                _df_tops_group[_group_i, ["pval_g1_group", "pval_g2_group"][n_tests]] = ACATest(_pval_group[:,1]; is_check=false)
+                            else
+                                _df_tops_group[_group_i, ["pval_g1_group", "pval_g2_group"][n_tests]] = ACATest(_pval_group; dims=1, is_check=false)
+                            end
+                        end
                     end
                 end
             end
@@ -1078,6 +1126,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
         @runif !nominal_only | (multiple_testing_method == "acat") begin
             if with_group
                 append!(df_tops, _df_tops_group)
+                append!(df_tops_detail, _df_tops)
                 @runif !nominal_only append!(df_perm, _df_perm_group)
             else
                 append!(df_tops, _df_tops)
@@ -1097,20 +1146,15 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                     task_df_full.af .= round.(task_df_full.af, digits=3)
                     if isnothing(_args_output_format)
                         chunk_full_out_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl_pairs.", task_chunk, ".txt.gz"))
+                        push!(list_full_summary_files, chunk_full_out_file)
                         @runif _args_use_gzip chunk_full_out_file = replace(chunk_full_out_file, r".gz$" => "")
                         CSV.write(chunk_full_out_file, task_df_full, delim="\t", compress=!_args_use_gzip)
                         @runif _args_use_gzip run(`gzip -f $chunk_full_out_file`; wait=chrom == chroms[end])
                     else
-                        if _args_output_format == "jld"
-                            chunk_full_out_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl_pairs.", task_chunk, ".jld"))
-                            save(chunk_full_out_file, "data", task_df_full)
-                        elseif _args_output_format == "arrow"
-                            chunk_full_out_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl_pairs.", task_chunk, ".arrow"))
-                            Arrow.write(chunk_full_out_file, task_df_full)
-                        elseif _args_output_format == "arrow_zstd"
-                            chunk_full_out_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl_pairs.", task_chunk, ".arrow"))
-                            Arrow.write(chunk_full_out_file, task_df_full, compress=:zstd)
-                        end
+                        pairs_file_suffix = _args_output_format in ["jld", "jld_compress"] ? ".jld" : _args_output_format in ["jld2", "jld2_compress"] ? ".jld2" : _args_output_format in ["arrow", "arrow_zstd" , "arrow_lz4"] ? ".arrow" : ".txt.gz"
+                        chunk_full_out_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl_pairs.", task_chunk, pairs_file_suffix))
+                        push!(list_full_summary_files, chunk_full_out_file)
+                        write_qtl_pairs_file(chunk_full_out_file, task_df_full; format=_args_output_format)
                     end
                 end
             end
@@ -1125,22 +1169,37 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                 cols_float = [_df_tops_group[1, x] isa AbstractFloat for x in range(1, ncol(_df_tops_group))]
                 _df_tops_group[:, cols_float] .= round.(_df_tops_group[:, cols_float], sigdigits=6)
             end
-            @runif !nominal_only cols_float = [_df_perm[1, x] isa AbstractFloat for x in range(1, ncol(_df_perm))]
-            @runif !nominal_only _df_perm[:, cols_float] .= round.(_df_perm[:, cols_float], sigdigits=6)
             if length(_args_chrom) > 0
                 task_chunk = chrom_mode ? chrom : string("chunk", chid, ".", chrom)
-                CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.", task_chunk, ".txt")), _df_tops, delim="\t")
-                @runif _args_debug @runif !nominal_only CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".perm.", task_chunk, ".txt")), _df_perm, delim="\t")
+                is_append = false
+                cis_qtl_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.", task_chunk, ".txt.gz"))
+                @runif with_group cis_qtl_detail_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.detail.", task_chunk, ".txt.gz"))
+                @runif !nominal_only cis_perm_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.perm.", task_chunk, ".arrow")) 
             else
                 is_append = chid != chunk_map.chunkindex[1]
-                if with_group
-                    CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.detail.txt.gz")), _df_tops, delim="\t", compress=true, append=is_append)
-                    CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.txt.gz")), _df_tops_group, delim="\t", compress=true, append=is_append)
-                    @runif _args_debug @runif !nominal_only CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".perm.detail.txt.gz")), _df_perm, delim="\t", compress=true, append=is_append)
-                    @runif _args_debug @runif !nominal_only CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".perm.txt.gz")), _df_perm_group, delim="\t", compress=true, append=is_append)
+                cis_qtl_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.txt.gz"))
+                @runif with_group cis_qtl_detail_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.detail.txt.gz"))
+                @runif !nominal_only cis_perm_file = joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.perm.arrow"))
+            end
+            if with_group
+                if multiple_testing_method != "acat"
+                    _df_tops_detail = select(_df_tops, Not(["pval_g1_threshold", "pval_g2_threshold"][n_tests]))
                 else
-                    CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.txt.gz")), _df_tops, delim="\t", compress=true, append=is_append)
-                    @runif _args_debug @runif !nominal_only CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".perm.txt.gz")), _df_perm, delim="\t", compress=true, append=is_append)
+                    _df_tops_detail = _df_tops
+                end
+                CSV.write(cis_qtl_file, _df_tops_group, delim="\t", compress=endswith(cis_qtl_file, ".gz"), append=is_append)
+                CSV.write(cis_qtl_detail_file, _df_tops_detail, delim="\t", compress=endswith(cis_qtl_detail_file, ".gz"), append=is_append)
+                @runif !nominal_only if !is_append
+                    Arrow.write(cis_perm_file, _df_perm_group, compress=:zstd, file=false)
+                else
+                    Arrow.append(cis_perm_file, _df_perm_group)
+                end
+            else
+                CSV.write(cis_qtl_file, _df_tops, delim="\t", compress=endswith(cis_qtl_file, ".gz"), append=is_append)
+                @runif !nominal_only if !is_append
+                    Arrow.write(cis_perm_file, _df_perm, compress=:zstd, file=false)
+                else
+                    Arrow.append(cis_perm_file, _df_perm)
                 end
             end
         end
@@ -1172,17 +1231,67 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
     end
     @runif multiple_testing_method == "acat" if length(_args_chrom) == 0
         mt_col = n_tests > 2 ? "joint" : string("g", n_tests)
-        mt_keep_index = .!isnan.(df_tops[:, string("pval_", mt_col, "_acat")])
+        pval_colname = string("pval_", mt_col)
+        mt_keep_index = .!isnan.(df_tops[:, with_group ? string("pval_", mt_col, "_group") : string("pval_", mt_col, "_pheno")])
         df_tops_keep = df_tops[mt_keep_index, :]
         df_tops_mt = df_tops_keep
-        pval_mt = df_tops_mt[:, string("pval_", mt_col, "_acat")]
+        pval_mt = df_tops_mt[:, with_group ? string("pval_", mt_col, "_group") : string("pval_", mt_col, "_pheno")]
         qval_mt = MultipleTesting.adjust(pval_mt, BenjaminiHochberg())
         df_tops_mt[:, string("qval_", mt_col)] .= qval_mt
+        @timeit to "Get final acat threshold" begin
+            println_to_file(string("    Calculating the ", string("pval_", mt_col, "_threshold"), " ..."), log_file)
+            fdr_closest_i = find_closest_below_fast(qval_mt, _args_fdr)
+            @timeit to "Get 1" if fdr_closest_i != -1
+                fdr_closest_i_up = find_closest_up_fast(qval_mt, _args_fdr)
+                if with_group
+                    critical_acat_p = sqrt(df_tops_mt[fdr_closest_i, string("pval_", mt_col, "_group")] * df_tops_mt[fdr_closest_i_up, string("pval_", mt_col, "_group")])
+                else
+                    critical_acat_p = sqrt(df_tops_mt[fdr_closest_i, string("pval_", mt_col, "_pheno")] * df_tops_mt[fdr_closest_i_up, string("pval_", mt_col, "_pheno")])
+                end
+                full_summary_files = list_full_summary_files
+                for fn in full_summary_files
+                    println_to_file(string("    *** Processing ", fn), log_file)
+                    _cis_qtl_pairs = read_qtl_pairs_file(fn)
+                    pheno_ids = unique(_cis_qtl_pairs.pheno_id)
+                    group_ids = nothing
+                    println_to_file(string("        Number of phenotypes: ", length(pheno_ids)), log_file)
+                    if with_group 
+                        group_ids = unique(df_tops_detail.group_id[df_tops_detail.pheno_id.∈(pheno_ids,)])
+                        println_to_file(string("        Number of groups: ", length(group_ids)), log_file)
+                    end
+                    @threads for _pid in pheno_ids
+                        _pi = findfirst(df_test_gene_annot.pheno_id .== _pid)
+                        _df_full_index = df_test_gene_annot.summary_start[_pi]:df_test_gene_annot.summary_end[_pi]
+                        _pval_mt = _cis_qtl_pairs[_df_full_index, pval_colname]
+                        nonan_indices = .!isnan.(_pval_mt)
+                        if any(.!nonan_indices)
+                            _pval_mt = _pval_mt[nonan_indices]
+                        end
+                        if length(_pval_mt) > 0
+                            _, pval_nominal_threshold, _ = calcu_target_pval_threshold_acat!(_pval_mt, critical_acat_p)
+                            if !with_group 
+                                df_tops_mt[findfirst(df_tops_mt.pheno_id.==_pid), string("pval_", mt_col, "_threshold")] = pval_nominal_threshold
+                            else
+                                df_tops_detail[findfirst(df_tops_detail.pheno_id.==_pid), string("pval_", mt_col, "_threshold")] = pval_nominal_threshold
+                            end
+                        end
+                    end
+                    if with_group
+                        matchidx = vmatch(df_tops_detail.pheno_id, df_tops_mt.pheno_id)
+                        df_tops_mt[.!isnothing.(matchidx), string("pval_", mt_col, "_threshold")] .= df_tops_detail[matchidx[.!isnothing.(matchidx)], string("pval_", mt_col, "_threshold")]
+                        cols_float = [df_tops_detail[1, x] isa AbstractFloat for x in range(1, ncol(df_tops_detail))]
+                        df_tops_detail[:, cols_float] = round.(df_tops_detail[:, cols_float], sigdigits=6)
+                        CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.detail.txt.gz")), df_tops_detail, delim="\t", compress=true)
+                    end
+                end
+            end
+            println_to_file(string("    Done."), log_file)
+        end
         cols_float = [df_tops_mt[1, x] isa AbstractFloat for x in range(1, ncol(df_tops_mt))]
         df_tops_mt[:, cols_float] = round.(df_tops_mt[:, cols_float], sigdigits=6)
         CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".cis_qtl.txt.gz")), df_tops_mt, delim="\t", compress=true)
         n_significant_phenotypes = sum(qval_mt .< FloatT(_args_fdr))
-        logtxt = string("  *** ", n_significant_phenotypes, " out of ", length(qval_mt), " tested phenotypes with qval_", mt_col, "<", _args_fdr, ".")
+        logtxt = string("  *** ", n_significant_phenotypes, " out of ", length(qval_mt), " tested ", with_group ? "phenotype groups" : "phenotypes", " with qval_", mt_col, "<", _args_fdr, ".")
         println_to_file(logtxt, log_file)
     end
     @runif multiple_testing_method == "clipper" if length(_args_chrom) == 0
@@ -1196,14 +1305,24 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             if n_perms < 1000
                 res_clipper = Clipper(Matrix(df_perm_mt[:, 3:3]), Matrix(df_perm_mt[:, 4:end]), analysis="enrichment", procedure="GZ", contrast_score="max", FDR=[FloatT(_args_fdr)])
                 qval_mt = res_clipper["q"]
+                if !with_group
+                    select!(df_tops_mt, Not("pval_g1_pheno"))
+                else
+                    select!(df_tops_mt, Not("pval_g1_group"))
+                end
             else
                 numsOfPermsMoreSig = sum(Matrix(df_perm_mt[:, 3:3]) .- Matrix(df_perm_mt[:, 4:end]) .<= 0, dims=2)
                 pval_mt = vec((numsOfPermsMoreSig .+ 1) ./ (n_perms + 1))
+                if !with_group 
+                    df_tops_mt.pval_g1_pheno .= pval_mt
+                else
+                    df_tops_mt.pval_g1_group .= pval_mt
+                end
                 qval_mt = MultipleTesting.adjust(pval_mt, BenjaminiHochbergAdaptive(Storey(_args_storey_lambda)))
             end
             df_tops_mt.qval_g1 .= qval_mt
             n_significant_phenotypes = sum(df_tops_mt.qval_g1 .< _args_fdr)
-            logtxt = string("  *** ", n_significant_phenotypes, " out of ", sum(mt_keep_index), " tested phenotypes with qval_g", n_tests, "<", _args_fdr, ".")
+            logtxt = string("  *** ", n_significant_phenotypes, " out of ", sum(mt_keep_index), " tested ", with_group ? "phenotype groups" : "phenotypes", " with qval_g", n_tests, "<", _args_fdr, ".")
             println_to_file(logtxt, log_file)
         elseif n_tests == 2
             for i in 2:2
@@ -1212,9 +1331,19 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                 if n_perms < 1000
                     res_clipper = Clipper(Matrix(df_perm_mt[:, idx_exp]), Matrix(df_perm_mt[:, idx_back]), analysis="enrichment", procedure="GZ", contrast_score="max", FDR=[FloatT(_args_fdr)])
                     qval_mt = res_clipper["q"]
+                    if !with_group
+                        select!(df_tops_mt, Not("pval_g2_pheno"))
+                    else
+                        select!(df_tops_mt, Not("pval_g2_group"))
+                    end
                 else
                     numsOfPermsMoreSig = sum(Matrix(df_perm_mt[:, idx_exp]) .- Matrix(df_perm_mt[:, idx_back]) .<= 0, dims=2)
                     pval_mt = vec((numsOfPermsMoreSig .+ 1) ./ (n_perms + 1))
+                    if !with_group 
+                        df_tops_mt.pval_g2_pheno .= pval_mt
+                    else
+                        df_tops_mt.pval_g2_group .= pval_mt
+                    end
                     qval_mt = MultipleTesting.adjust(pval_mt, BenjaminiHochbergAdaptive(Storey(_args_storey_lambda)))
                 end
                 mt_col_name = ["qval_g1", "qval_g2", "qval_joint"][i]
@@ -1222,7 +1351,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                 df_tops_mt[:, mt_col_name] .= NaN
                 df_tops_mt[:, mt_col_name] .= qval_mt
                 n_significant_phenotypes = sum(df_tops_mt[:, mt_col_name] .< FloatT(_args_fdr))
-                logtxt = string("  *** ", n_significant_phenotypes, " out of ", sum(mt_keep_index), " tested phenotypes with qval_", ["g1", "g2", "g_joint"][i], "<", _args_fdr, ".")
+                logtxt = string("  *** ", n_significant_phenotypes, " out of ", sum(mt_keep_index), " tested ", with_group ? "phenotype groups" : "phenotypes", " with qval_", ["g1", "g2", "g_joint"][i], "<", _args_fdr, ".")
                 println_to_file(logtxt, log_file)
             end
         end

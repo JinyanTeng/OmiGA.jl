@@ -245,9 +245,9 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
         _gene_annot = sig_gene_annot[sig_gene_annot.chrom.==chrom, :]
         _snp_annot = snp_annotation[snp_annotation.chromosome.==chrom, :]
         if with_group 
-            _n_genes = sum(_gene_annot.group_id_first) 
+            _n_phenos = sum(_gene_annot.group_id_first) 
         else
-            _n_genes = length(_gene_annot.pheno_id) 
+            _n_phenos = length(_gene_annot.pheno_id) 
         end
         _df_inds = DataFrame()
         df_full = DataFrame()
@@ -285,9 +285,9 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
         GC.gc()
         time_start = now()
         println_to_file(string("Chromosome: ", chrom, ", start at: ", time_start), log_file)
-        @runif with_group for i in 1:_n_genes
+        @runif with_group for i in 1:_n_phenos
             gene = unique(_gene_annot.group_id)[i]
-            println_to_file(string("    PHENO: ", i, "/", _n_genes, " <", gene,">"), log_file)
+            println_to_file(string("    PHENO: ", i, "/", _n_phenos, " <", gene,">"), log_file)
             group_pheno_ids = _gene_annot.pheno_id[_gene_annot.group_id.==gene]
             group_size = length(group_pheno_ids)
             index_tested_gene = findfirst(sig_df_tops.group_id .== gene)
@@ -645,9 +645,9 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
                 println()
             end
         end
-        @runif !with_group for i in 1:_n_genes
+        @runif !with_group for i in 1:_n_phenos
             gene = _gene_annot.pheno_id[i]
-            println_to_file(string("    PHENO: ", i, "/", _n_genes, " <", gene,">"), log_file)
+            println_to_file(string("    PHENO: ", i, "/", _n_phenos, " <", gene,">"), log_file)
             index_tested_gene = findfirst(sig_df_tops.pheno_id .== gene)
             global_index_tested_gene = _gene_annot.index[findfirst(_gene_annot.pheno_id .== gene)]
             @timeit to "Keep SNPs within cis-region" cissnps_annot, n_cis_snps = get_cis_snp_info(_gene_annot, _snp_annot, gene, _args_cis_window)

@@ -1,52 +1,82 @@
-function append_top_summary!(_df_full, _df_tops, gene_i, n_tests)
+function calcu_target_pval_threshold_acat!(p::AbstractVector{T}, critical_acat_p::T) where T
+    sort!(p,rev=true)
+    got_it = false
+    pii1 = ACATest(p; is_check=false)
+    pos1 = length(p)
+    pos0 = 1
+    posm = round(Int, median([pos0 pos1]))
+    iter = 0
+    offset = 0
+    while pii1 <= critical_acat_p
+        iter += 1
+        piim = ACATest(p[1:posm]; is_check=false)
+        if piim <= critical_acat_p
+            pos1 = posm
+        else
+            pos0 = posm
+        end
+        posm = floor(Int, median([pos0 pos1]))
+        if posm == pos0 || posm == pos1
+            got_it = true
+            piim = ACATest(p[1:posm]; is_check=false)
+            if piim <= critical_acat_p
+                offset = -1
+            else
+                offset = 1
+            end
+            break
+        end
+        pii1 = ACATest(p[1:pos1]; is_check=false)
+    end
+    if got_it
+        if length(p) == 1 || (posm == 1 && offset <= 0)
+            pval_nominal_threshold = p[posm] + 1e-10
+        else
+            pval_nominal_threshold = sqrt(p[posm] * p[posm+offset])
+        end
+    else
+        pval_nominal_threshold = NaN
+    end
+    return posm, pval_nominal_threshold, iter
+end
+function append_top_summary!(_df_full, _df_tops, gene_i, n_tests, dof)
+    com_colnames = intersect(names(_df_full),names(_df_tops))
     if n_tests == 1
         index_top = first_nonnan_argmin(_df_full.pval_g1) 
         if index_top == -1
-            return false
+            return NaN
         end
         _df_tops.num_var[gene_i] = size(_df_full, 1)
-        _df_tops.variant_id[gene_i] = _df_full.variant_id[index_top]
-        _df_tops.start_distance[gene_i] = _df_full.start_distance[index_top]
-        _df_tops.af[gene_i] = _df_full.af[index_top]
-        _df_tops.beta_g1[gene_i] = _df_full.beta_g1[index_top]
-        _df_tops.beta_se_g1[gene_i] = _df_full.beta_se_g1[index_top]
-        _df_tops.pval_g1[gene_i] = _df_full.pval_g1[index_top]
+        _df_tops[gene_i, com_colnames] = _df_full[index_top, com_colnames]
+        absr_exper = get_approx_absr(_df_full.beta_g1[index_top], _df_full.beta_se_g1[index_top], dof)
+        return absr_exper
     elseif n_tests == 2
         index_top = first_nonnan_argmin(_df_full.pval_g2)
         if index_top == -1
-            return false
+            return NaN
         end
         _df_tops.num_var[gene_i] = size(_df_full, 1)
-        _df_tops.variant_id[gene_i] = _df_full.variant_id[index_top]
-        _df_tops.start_distance[gene_i] = _df_full.start_distance[index_top]
-        _df_tops.af[gene_i] = _df_full.af[index_top]
-        _df_tops.beta_g1[gene_i] = _df_full.beta_g1[index_top]
-        _df_tops.beta_se_g1[gene_i] = _df_full.beta_se_g1[index_top]
-        _df_tops.pval_g1[gene_i] = _df_full.pval_g1[index_top]
-        _df_tops.beta_g2[gene_i] = _df_full.beta_g2[index_top]
-        _df_tops.beta_se_g2[gene_i] = _df_full.beta_se_g2[index_top]
-        _df_tops.pval_g2[gene_i] = _df_full.pval_g2[index_top]
+        _df_tops[gene_i, com_colnames] = _df_full[index_top, com_colnames]
+        absr_exper = get_approx_absr(_df_full.beta_g2[index_top], _df_full.beta_se_g2[index_top], dof)
+        return absr_exper
     elseif n_tests > 2
         index_top = first_nonnan_argmin(_df_full.pval_joint)
         if index_top == -1
-            return false
+            return NaN
         end
         _df_tops.num_var[gene_i] = size(_df_full, 1)
-        _df_tops.variant_id[gene_i] = _df_full.variant_id[index_top]
-        _df_tops.start_distance[gene_i] = _df_full.start_distance[index_top]
-        _df_tops.af[gene_i] = _df_full.af[index_top]
-        _df_tops[gene_i, string.("beta_g", 1:n_tests)] = _df_full[index_top, string.("beta_g", 1:n_tests)]
-        _df_tops[gene_i, string.("beta_se_g", 1:n_tests)] = _df_full[index_top, string.("beta_se_g", 1:n_tests)]
-        _df_tops[gene_i, string.("pval_g", 1:n_tests)] = _df_full[index_top, string.("pval_g", 1:n_tests)]
-        _df_tops.pval_joint[gene_i] = _df_full.pval_joint[index_top]
+        _df_tops[gene_i, com_colnames] = _df_full[index_top, com_colnames]
+        return NaN
     end
-    return true
 end
 function ACATest(Pvals::AbstractVector{T1}; Weights::Union{Nothing,T2}=nothing, is_check::Bool=true) where {T1<:AbstractFloat,T2<:AbstractArray}
+    nonan_indices = .!isnan.(Pvals)
+    if sum(nonan_indices) == 0
+        return NaN
+    elseif sum(nonan_indices) != length(nonan_indices)
+        Pvals = Pvals[nonan_indices]
+    end
     if is_check
-        if any(ismissing.(Pvals))
-            error("Cannot have NAs in the p-values!")
-        end
         if any(Pvals .< 0) || any(Pvals .> 1)
             error("P-values must be between 0 and 1!")
         end
@@ -89,6 +119,89 @@ function ACATest(Pvals::AbstractVector{T1}; Weights::Union{Nothing,T2}=nothing, 
         1.0 - cdf(Cauchy(), cct_stat)
     end
     return pval
+end
+function ACATest(Pvals::AbstractMatrix{T1}; dims::Int=1, Weights::Union{Nothing,T2}=nothing, is_check::Bool=true) where {T1<:AbstractFloat,T2<:AbstractArray}
+    if dims == 1
+        vsize = size(Pvals, 2)
+        pvals = [ACATest(Pvals[:, vi]; Weights=Weights, is_check=is_check) for vi in 1:vsize]
+    elseif dims == 2
+        vsize = size(Pvals, 1)
+        pvals = [ACATest(Pvals[vi, :]; Weights=Weights, is_check=is_check) for vi in 1:vsize]
+    else
+        error("")
+    end
+    return ACATest(pvals; Weights=Weights, is_check=is_check)
+end
+function calcu_pval_threshold_acat(Pvals::AbstractVector{T1}, fdr::T1) where T1
+    sortedPvals = sort(Pvals,rev=true)
+    cutoff_i = -1
+    cutoff_p = NaN
+    for i in length(sortedPvals):1
+        p = ACATest(sortedPvals[1:i]; is_check=false) 
+        if p <= fdr
+            cutoff_i = i
+            cutoff_p = p
+        else
+            break
+        end
+    end
+    if cutoff_i != -1
+        return sortedPvals[cutoff_i], cutoff_p
+    else
+        return NaN, cutoff_p
+    end
+end
+function calcu_candidate_pval_threshold_acat(sortedPvals::AbstractVector{T1}, fdr::T1) where T1
+    condidate_p = T1[]
+    cutoff_p = T1[]
+    for i in length(sortedPvals):-1:1
+        p = ACATest(sortedPvals[1:i]; is_check=false)
+        push!(condidate_p, sortedPvals[i])
+        push!(cutoff_p, p)
+        if p > fdr
+            break
+        end
+    end
+    return condidate_p, cutoff_p
+end
+function calcu_candidate_pval_threshold_acat(Pvals::AbstractMatrix{T1}, fdr::T1, name_list::AbstractVector) where T1
+    nc = size(Pvals,2)
+    condidate_p_df = DataFrame() 
+    for i in 1:nc
+        condidate_p, cutoff_p = calcu_candidate_pval_threshold_acat(Pvals[:, i], fdr)
+        np = length(condidate_p)
+        if np > 0
+            append!(condidate_p_df, DataFrame(pheno_id = repeat([name_list[i]], np), cutoff_pval = condidate_p, cutoff_acatp = cutoff_p))
+        else
+            continue
+        end
+    end
+    return condidate_p_df
+end
+function calcu_candidate_pval_threshold_acat!(Pvals::AbstractMatrix{T1}, fdr::T1, name_list::AbstractVector) where T1
+    sort!(Pvals,dims=1,rev=true)
+    nc = size(Pvals,2)
+    condidate_p_df = DataFrame() 
+    for i in 1:nc
+        @views condidate_p, cutoff_p = calcu_candidate_pval_threshold_acat(Pvals[:, i], fdr)
+        np = length(condidate_p)
+        if np > 0
+            append!(condidate_p_df, DataFrame(pheno_id = repeat([name_list[i]], np), cutoff_pval = condidate_p, cutoff_acatp = cutoff_p))
+        else
+            continue
+        end
+    end
+    return condidate_p_df
+end
+function calcu_candidate_pval_threshold_acat!(Pvals::AbstractVector{T1}, fdr::T1, name::AbstractString) where T1
+    sort!(Pvals;rev=true)
+    condidate_p_df = DataFrame() 
+    @views condidate_p, cutoff_p = calcu_candidate_pval_threshold_acat(Pvals, fdr)
+    np = length(condidate_p)
+    if np > 0
+        append!(condidate_p_df, DataFrame(pheno_id = repeat([name], np), cutoff_pval = condidate_p, cutoff_acatp = cutoff_p))
+    end
+    return condidate_p_df
 end
 function get_GC_lambda(median_P::T) where {T}
     if isnan(median_P)
@@ -177,6 +290,13 @@ function center_normalize!(M_t::AbstractVector{T}, dim::Int=1; center::Bool=true
         M_t .-= Statistics.mean(M_t)
     end
     M_t ./= sqrt(sum(abs2.(M_t)))
+end
+function center_normalize(M_t::AbstractVector{T}, dim::Int=1; center::Bool=true) where {T}
+    """Center and normalize M"""
+    if center
+        N_t = M_t .- Statistics.mean(M_t)
+    end
+    return N_t ./= sqrt(sum(abs2.(N_t)))
 end
 function get_matrix_resid(exppheno::AbstractVector{T}, Q::Union{Nothing,AbstractMatrix{T}}; return_std::Bool=false) where {T}
     if !isnothing(Q)
@@ -325,17 +445,43 @@ function getVinv!(Vi::Matrix{T}, VCM_Arr::Vector{Matrix{T}}, Σ_i::Vector{T}) wh
         Vi .= inv(Vi)
     end
 end
-function get_cis_snp_info(_gene_annot::DataFrame, _snp_annot::DataFrame, gene::AbstractString, window::Int; nsnp_only::Bool=false)
+function get_cis_snp_info(_gene_annot::DataFrame, _snp_annot::DataFrame, gene::AbstractString, window::Int; nsnp_only::Bool=false, window_type::String="tss")
+    with_strand = issubset(["strand"], names(_gene_annot))
     geneinfo = _gene_annot[_gene_annot.pheno_id.==gene, :]
-    tss_pos = geneinfo.start[1]
-    end_pos = geneinfo.end[1]
-    window_start_pos = max(0, tss_pos - window)
-    window_end_pos = end_pos + window - 1
+    strand = with_strand ? geneinfo.strand[1] : "+"
+    if strand == "+"
+        tss_pos = geneinfo.start[1]
+        end_pos = geneinfo.end[1]
+    elseif strand == "-"
+        tss_pos = geneinfo.end[1]
+        end_pos = geneinfo.start[1]
+    else
+        error("Undefined strand.")
+    end
+    if window_type == "tss"
+        window_start_pos = max(0, tss_pos - window)
+        window_end_pos = tss_pos + window
+    elseif window_type == "body"
+        if with_strand == "+"
+            window_start_pos = max(0, tss_pos - window)
+            window_end_pos = end_pos + window - 1
+        else
+            window_start_pos = max(0, end_pos - window)
+            window_end_pos = tss_pos + window - 1
+        end
+    else
+        error("Undefined --window-type.")
+    end
     if !nsnp_only
         cissnps_annot = _snp_annot[(_snp_annot.position.>=window_start_pos).&(_snp_annot.position.<=window_end_pos), :]
         cissnps_annot.pheno_id .= gene
-        cissnps_annot.start_distance .= cissnps_annot.position .- tss_pos
-        cissnps_annot.end_distance .= cissnps_annot.position .- end_pos .+ 1
+        if strand == "+"
+            cissnps_annot.start_distance .= cissnps_annot.position .- tss_pos
+            cissnps_annot.end_distance .= cissnps_annot.position .- end_pos
+        else            
+            cissnps_annot.start_distance .= tss_pos .- cissnps_annot.position
+            cissnps_annot.end_distance .= end_pos .- cissnps_annot.position
+        end
         n_snps = size(cissnps_annot, 1)
         return cissnps_annot, n_snps
     else
@@ -752,6 +898,12 @@ function get_approx_p_from_r(assoc_r::Vector{T}, dof::T) where {T<:AbstractFloat
     assoc_r2 = abs2.(assoc_r)
     clamp!(assoc_r2, 0, 1)
     tstat = abs.(assoc_r .* sqrt.(dof ./ (1 .- assoc_r2)))
+    pv_s = cdf(TDist(dof), -tstat) * 2
+    return pv_s
+end
+function get_approx_p_from_r(assoc_r::T, dof) where {T<:AbstractFloat}
+    assoc_r2 = clamp(abs2(assoc_r), 0, 1)
+    tstat = abs(assoc_r * sqrt(dof / (1 - assoc_r2)))
     pv_s = cdf(TDist(dof), -tstat) * 2
     return pv_s
 end

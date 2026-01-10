@@ -933,9 +933,24 @@ function getMRVCModel(multi_KSs::Vector{Matrix{T}}, Y::Vector{T}; X::Union{Nothi
     else
         vcmodel = MRVCModel(Y, X, multi_KSs; se=se, reml=reml)
     end
-    mrvc_model_status = MultiResponseVarianceComponentModels.fit!(vcmodel; maxiter=maxiter,verbose=verbose) 
-    h2s, ses, Σs, Σses = MultiResponseVarianceComponentModels.h2(vcmodel)
-    Bse = sqrt.(diag(vcmodel.Bcov))
+    h2s = fill(NaN, n_grm + 1)
+    ses = fill(NaN, n_grm + 1)
+    Σs = fill(NaN, n_grm + 1)
+    Σses = fill(NaN, n_grm + 1)
+    logl = nothing
+    B = nothing
+    Bse = nothing
+    isconverged = false
+    try
+        mrvc_model_status = MultiResponseVarianceComponentModels.fit!(vcmodel; maxiter=maxiter,verbose=verbose) 
+        isconverged = mrvc_model_status.isconverged
+        h2s, ses, Σs, Σses = MultiResponseVarianceComponentModels.h2(vcmodel)
+        logl = vcmodel.logl
+        B = vec(vcmodel.B)
+        Bse = vec(sqrt.(diag(vcmodel.Bcov)))
+    catch e
+        println(string("[SKIP] ", e))
+    end
     abc_uni = Dict(
             :ΣG => Σs[1:n_grm],
             :ΣG_se => Σses[1:n_grm],
@@ -945,13 +960,13 @@ function getMRVCModel(multi_KSs::Vector{Matrix{T}}, Y::Vector{T}; X::Union{Nothi
             :Σp_se => nothing,
             :h2 => h2s[1:n_grm],
             :h2_se => ses[1:n_grm],
-            :logL => vcmodel.logl,
+            :logL => logl,
             :logL0 => nothing,
             :n => n,
-            :Fix_eff => vec(vcmodel.B),
-            :Fix_eff_se => vec(Bse),
+            :Fix_eff => B,
+            :Fix_eff_se => Bse,
             :u => nothing,
-            :converged => mrvc_model_status.isconverged
+            :converged => isconverged
             )
     return abc_uni
 end

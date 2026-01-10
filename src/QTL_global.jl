@@ -1,8 +1,12 @@
-function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _struct_PRIOR_HerB; _struct_DOM::Union{Nothing,Dominance}=nothing, is_exclude_cis_chrom::Bool=false)
+function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _struct_PRIOR_HerB; _struct_DOM::Union{Nothing,Dominance}=nothing, is_exclude_cis_chrom::Bool=false, exclude_window::Union{Nothing,Int}=nothing)
     is_write_text = _args_run_mode == "gwas"
+    task_id = 0
+    task_num = 0
     if length(_args_multi_task) == 2
-        task_id = _args_multi_task[2]
-        task_num = _args_multi_task[1]
+        task_id = minimum(_args_multi_task) 
+        task_num = maximum(_args_multi_task) 
+        println_to_file(string("*** The analysis was split into [", task_num, "] tasks."), log_file)
+        println_to_file(string("*** The current task ID is [", task_id, "]."), log_file)
         task_collects = collect(Iterators.partition(1:_struct_PHENO.n_phenotypes, ceil(Int, _struct_PHENO.n_phenotypes / task_num)))
         pheno_annotation = _struct_PHENO.annotation[task_collects[task_id], :]
         phenotype = _struct_PHENO.phenotype[:, task_collects[task_id]]
@@ -40,7 +44,7 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
     end
     tstat_threshold = quantile(WaldTest(1, _n - _X_c - 1), 1 - reserved_pthreshold)
     if n_phenotypes > 1000
-        @info string("A total of ", n_phenotypes, " phenotypes used for analysis, this may causa memory overflow!\nRecommend to split the analysis to a sets of small tasks using '--multi-task' option.")
+        @info string("A total of ", n_phenotypes, " phenotypes used for analysis, this may causa memory overflow!\nRecommend to split the analysis to a sets of small tasks using the '--multi-task' option.")
     end
     qtl_map_model = _args_qtl_map_model
     qtl_map_algo = _args_qtl_map_algo
@@ -126,18 +130,21 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
     df_tops = DataFrame()
     pheno_annotation.index = 1:nrow(pheno_annotation)
     chroms = string.(unique(snp_annotation.chromosome))
+    if length(chroms) == 0
+        error("Non-overlapping chromosomes between genotype and phenotype data!")
+    end
     _task_write_full_pairs = @task @info "Using Tasks"
     for chrom in chroms 
         snp_index_chrom = snp_annotation.chromosome .== chrom
         _snp_annot = snp_annotation[snp_index_chrom, :]
-        _snp_annot.reindex = 1:size(_snp_annot, 1)
+        _snp_annot.reindex = 1:size(_snp_annot, 1) 
         if is_calcu_lambda
             chrom_lambda_snp_reindex = _snp_annot.reindex[_snp_annot.index.∈(lambda_snp_index,)]
             chrom_lambda_snp_matindex = findall(lambda_snp_index .∈ (_snp_annot.index,))
         end
         n_chrom_snps = sum(snp_index_chrom)
         _gene_annot = pheno_annotation 
-        _n_genes = length(_gene_annot.pheno_id) 
+        _n_phenos = length(_gene_annot.pheno_id) 
         @timeit to "Pull gwas-SNP genotypes" begin
             _2p = 2 .* _snp_annot.af
             _2pq = _2p .* (1 .- _snp_annot.af)
@@ -166,9 +173,9 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
             end
         end
         @timeit to "temporary DataFrame to store associations" begin
-            _chrom_df_full = spzeros(FloatT, n_chrom_snps, 3 * _n_genes)
-            _n_genes_batch = ceil(Int, _n_genes / 10)
-            iter_collects = collect(Iterators.partition(1:_n_genes, _n_genes_batch))
+            _chrom_df_full = spzeros(FloatT, n_chrom_snps, 3 * _n_phenos)
+            _n_genes_batch = ceil(Int, _n_phenos / 10)
+            iter_collects = collect(Iterators.partition(1:_n_phenos, _n_genes_batch))
             _df_test = zeros(FloatT, n_chrom_snps, length(iter_collects[1]) * 3) 
         end
         begin
@@ -178,11 +185,11 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
         GC.gc()
         time_start = now()
         println_to_file(string("Chromosome: ", chrom, ", start at: ", time_start), log_file)
-        for batchi in 1:length(iter_collects)
+        for batchi in eachindex(iter_collects)
             fill!(_df_test, 0)
             for i in iter_collects[batchi]
                 gene = _gene_annot.pheno_id[i]
-                println_to_file(string("    PHENO: ", i, "/", _n_genes, " <", gene,">"), log_file)
+                println_to_file(string("    PHENO: ", i, "/", _n_phenos, " <", gene,">"), log_file)
                 @runif is_exclude_cis_chrom (_gene_annot.chrom[i] == chrom) && continue
                 exppheno = phenotype[:, findfirst(pheno_annotation.pheno_id .== gene)] 
                 if qtl_map_algo == "standard"
@@ -227,9 +234,18 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
                     if is_calcu_lambda
                         lambda_p_mat[chrom_lambda_snp_matindex, i] .= view(_df_test, :, current_df_cols)[chrom_lambda_snp_reindex, 3]
                     end
-                    @runif !_args_lambda_only if tstat_threshold > 0
-                        df_test_omit_rows = view(_df_test, :, current_df_cols)[:, 3] .< tstat_threshold
-                        fill!(view(_df_test, df_test_omit_rows, current_df_cols), 0)
+                    if !_args_lambda_only 
+                        if tstat_threshold > 0
+                            df_test_omit_rows = view(_df_test, :, current_df_cols)[:, 3] .< tstat_threshold
+                            fill!(view(_df_test, df_test_omit_rows, current_df_cols), 0)
+                        elseif tstat_threshold == 0 && !is_write_text 
+                            df_test_omit_rows = iszero.(view(_df_test, :, current_df_cols)[:, 3])
+                            fill!(view(_df_test, df_test_omit_rows, current_df_cols), 0)
+                        end
+                        if !isnothing(exclude_window) && chrom == _gene_annot.chrom[i]
+                            exclude_snp_indices = get_cis_snp_info(_gene_annot, _snp_annot, gene, exclude_window; window_type=_args_window_type)[1].reindex
+                            fill!(view(_df_test, exclude_snp_indices, current_df_cols), 0)
+                        end
                     end
                 elseif qtl_map_algo == "standard"
                     @timeit to "Adjusted phenotype" yadj = exppheno 
@@ -275,7 +291,7 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
         lambda_est = vec(get_GC_lambda.(ccdf(WaldTest(1, _n - size(X_MME,2) - 1), median(lambda_p_mat, dims=1))))
         lambda_DF = DataFrame(:pheno_id => pheno_annotation.pheno_id, :lambda => lambda_est)
         if length(_args_multi_task) == 2
-            out_text = joinpath(_args_output_dir, string(_args_out_prefix, ".GC_lambda.task_", _args_multi_task[2], ".txt"))
+            out_text = joinpath(_args_output_dir, string(_args_out_prefix, ".GC_lambda.task_", task_id, ".txt"))
         else
             out_text = joinpath(_args_output_dir, string(_args_out_prefix, ".GC_lambda.txt"))
         end
@@ -285,7 +301,7 @@ end
 function write_summary_file(task_df_full, _snp_annot, pheno_annotation, chrom, is_write_text, _n, _X_c)
     if !is_write_text
         if length(_args_multi_task) == 2
-            out_jld = joinpath(_args_output_dir, string(_args_out_prefix, ".assoc_pairs.", chrom, ".task_", _args_multi_task[2], ".jld2"))
+            out_jld = joinpath(_args_output_dir, string(_args_out_prefix, ".assoc_pairs.", chrom, ".task_", minimum(_args_multi_task), ".jld2"))
         else
             out_jld = joinpath(_args_output_dir, string(_args_out_prefix, ".assoc_pairs.", chrom, ".jld2"))
         end
@@ -306,7 +322,7 @@ function write_summary_file(task_df_full, _snp_annot, pheno_annotation, chrom, i
         task_df_full_df.af .= round.(task_df_full_df.af, digits=3)
         task_df_full_df.het_rate .= round.(task_df_full_df.het_rate, digits=3)
         if length(_args_multi_task) == 2
-            out_text = joinpath(_args_output_dir, string(_args_out_prefix, ".assoc_pairs.", chrom, ".task_", _args_multi_task[2], ".txt.gz"))
+            out_text = joinpath(_args_output_dir, string(_args_out_prefix, ".assoc_pairs.", chrom, ".task_", task_id, ".txt.gz"))
         else
             out_text = joinpath(_args_output_dir, string(_args_out_prefix, ".assoc_pairs.", chrom, ".txt.gz"))
         end

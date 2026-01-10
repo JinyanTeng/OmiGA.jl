@@ -99,11 +99,18 @@ function get_parsed_args(args)
             help = "output file(s) from '--mode cis'"
             nargs = '*'
             arg_type = String
+        "--cis-qtl-pairs"
+            help = "output file(s) from '--mode cis'"
+            nargs = '*'
+            arg_type = String
         "--her-file"
             help = "output file(s) from '--mode her_est'"
             nargs = '*'
             arg_type = String
-        "--multiple-testing"
+        "--multiple-testing", "--multiple-testing-first"
+            help = "method for multiple testing"
+            arg_type = String
+        "--multiple-testing-second"
             help = "method for multiple testing"
             arg_type = String
         "--storey-lambda"
@@ -116,12 +123,18 @@ function get_parsed_args(args)
         "--calcu-variant-threshold"
             help = "compute variant-level nominal P-value threshold"
             action = :store_true
-        "--output-significant-qtls"
-            help = "P-value threshold for vairant-phenotype pairs to be outputted"
+        "--extract-significant-qtls"
+            help = "extract vairant-phenotype pairs bellow the P-value threshold"
             action = :store_true
         "--maf-match"
             help = "Approximate range of MAF matched for target variants"
             arg_type = Float64
+        "--ld-match"
+            help = "Approximate s.d. of LD matched for target variants"
+            arg_type = Float64
+        "--ldscore-file"
+            help = "LD score file"
+            arg_type = String
         "--enrich-target"
             help = "bed file(s) of target set used for enrichment analysis"
             arg_type = String
@@ -135,10 +148,20 @@ function get_parsed_args(args)
         "--nominal-only"
             help = "permutation-free"
             action = :store_true
+        "--base-index"
+            help = "0-based or 1-based genomic coordinate"
+            arg_type = Int
         "--cis-window"
             help = "cis-window size in bp"
             arg_type = Int
             default = 1000000
+        "--trans-window"
+            help = "trans-window size in bp"
+            arg_type = Int
+        "--window-type"
+            help = "type of cis-region definition"
+            arg_type = String
+            default = "tss"
         "--mac-threshold"
             help = "minor allele count (MAC) threshold for genotypes"
             arg_type = Int
@@ -370,6 +393,12 @@ function get_parsed_args(args)
         "--chunk-size"
             help = "load genotypes into memory in chunks of approximate 'chunk-size' variants in QTL mapping"
             arg_type = Int
+        "--batch-size"
+            help = "load phenotypes into memory by batch size"
+            arg_type = Int
+        "--low-mem"
+            help = "memory-saving mode"
+            action = :store_true
         "--gpu"
             help = "using GPU"
             action = :store_true

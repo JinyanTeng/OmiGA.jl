@@ -251,6 +251,7 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
             begin
                 _df_hers[:, string("h2_g", i)] .= NAN
                 _df_hers[:, string("h2se_g", i)] .= NAN
+                _df_hers[:, string("h2p_g", i)] .= NaN 
             end for i in 1:n_grm
         ]
         if _args_use_low_rank_approx & (cis_h2_algo == "em_aireml") & (cis_h2_model in ["Ag+Ac", "Ag+Dc", "At+Ac"])
@@ -345,10 +346,12 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
                 _df_hers.ve[i] = glo_Σ_i[glo_n_cmp]
                 _df_hers.h2_g1[i] = glo_h2[1]
                 _df_hers.h2se_g1[i] = glo_h2_se[1]
+                _df_hers.h2p_g1[i] = ccdf(Chisq(1), (glo_h2[1] / glo_h2_se[1])^2) / 2
                 if glo_n_cmp == 3
                     _df_hers.vg2[i] = glo_Σ_i[2]
                     _df_hers.h2_g2[i] = glo_h2[2]
                     _df_hers.h2se_g2[i] = glo_h2_se[2]
+                    _df_hers.h2p_g2[i] = ccdf(Chisq(1), (glo_h2[2] / glo_h2_se[2])^2) / 2
                 end
                 if h2_algo in ["em_aireml", "idul_aireml", "minmax"]
                     _df_hers.converged[i] = glo_vc[:converged]
@@ -408,6 +411,7 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
                     _df_hers.ve[i] = cis_Σ_i[cis_n_cmp]
                     _df_hers.h2_g1[i] = cis_h2[1]
                     _df_hers.h2se_g1[i] = cis_h2_se[1]
+                    _df_hers.h2p_g1[i] = ccdf(Chisq(1), (cis_h2[1] / cis_h2_se[1])^2) / 2
                     if _args_use_low_rank_approx & (cis_h2_algo == "em_aireml") & (cis_h2_model in ["Ag+Ac", "Ag+Dc", "At+Ac"])
                         _df_hers.cis_rank[i] = approx_ranki
                     end
@@ -415,6 +419,7 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
                         _df_hers.vg2[i] = cis_Σ_i[2]
                         _df_hers.h2_g2[i] = cis_h2[2]
                         _df_hers.h2se_g2[i] = cis_h2_se[2]
+                        _df_hers.h2p_g2[i] = ccdf(Chisq(1), (cis_h2[2] / cis_h2_se[2])^2) / 2
                     end
                     _df_hers.cis_snps[i] = n_cis_snps
                     if cis_h2_model in ["At+Ac"]
@@ -451,10 +456,12 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
                 _df_hers.ve[i] = trans_Σ_i[trans_n_cmp]
                 _df_hers.h2_g1[i] = trans_h2[1]
                 _df_hers.h2se_g1[i] = trans_h2_se[1]
+                _df_hers.h2p_g1[i] = ccdf(Chisq(1), (trans_h2[1] / trans_h2_se[1])^2) / 2
                 if trans_n_cmp == 3
                     _df_hers.vg2[i] = trans_Σ_i[2]
                     _df_hers.h2_g2[i] = trans_h2[2]
                     _df_hers.h2se_g2[i] = trans_h2_se[2]
+                    _df_hers.h2p_g2[i] = ccdf(Chisq(1), (trans_h2[2] / trans_h2_se[2])^2) / 2
                 end
                 _df_hers.trans_snps[i] = n_trans_snps
                 if h2_algo in ["em_aireml", "idul_aireml", "minmax"]
@@ -470,6 +477,7 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
                 _df_hers[i, [string.("vg", 1:n_grm); "ve"]] .= multi_Σ_i
                 _df_hers[i, string.("h2_g", 1:n_grm)] .= multi_vc[:h2]
                 _df_hers[i, string.("h2se_g", 1:n_grm)] .= multi_vc[:h2_se]
+                _df_hers[i, string.("h2p_g", 1:n_grm)] .= ccdf(Chisq(1), (multi_vc[:h2] ./ multi_vc[:h2_se]) .^ 2) / 2
                 _df_hers.converged[i] = multi_vc[:converged]
                 println(multi_Σ_i)
             end

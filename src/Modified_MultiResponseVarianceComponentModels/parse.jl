@@ -101,9 +101,13 @@ function findvar(d::Int)
     idx
 end
 
-function sqrt_nan(x::Number) # added by Jinyan Teng
-    if x < 0
-        return NaN
+function sqrt_nan(x) # added by Jinyan Teng
+    if any(x .< 0)
+        if x isa AbstractArray
+            return sqrt(fill(NaN, size(x)))
+        else
+            return NaN
+        end
     else
         return sqrt(x)
     end
