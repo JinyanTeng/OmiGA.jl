@@ -98,7 +98,7 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
         lambda_snp_index .= 1:length(lambda_snp_index)
     end
     if is_calcu_lambda
-        println_to_file(string(" * GC lambda will be estimated using P-values from ", n_snps_est_lambda, " variants uniformly extracted from whole chromosomes being tested."), log_file)
+        println_to_file(string(" * GC lambda will be estimated using P-values from ", n_snps_est_lambda, " variants uniformly selected from all tested variants."), log_file)
         lambda_p_mat = fill(NAN, n_snps_est_lambda, n_phenotypes)
     end
     _args_PreV = n_grms == 2
@@ -288,8 +288,10 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
         end
     end
     if is_calcu_lambda
-        lambda_est = vec(get_GC_lambda.(ccdf(WaldTest(1, _n - size(X_MME,2) - 1), median(lambda_p_mat, dims=1))))
-        lambda_DF = DataFrame(:pheno_id => pheno_annotation.pheno_id, :lambda => lambda_est)
+        n_nonnan_P = [length(filter(!isnan, arr)) for arr in eachcol(lambda_p_mat)]
+        median_P = [median(filter(!isnan, arr)) for arr in eachcol(lambda_p_mat)]
+        lambda_est = vec(get_GC_lambda.(ccdf(WaldTest(1, _n - size(X_MME,2) - 1), median_P)))
+        lambda_DF = DataFrame(:pheno_id => pheno_annotation.pheno_id, :lambda => lambda_est, :lambda_snps => n_nonnan_P)
         if length(_args_multi_task) == 2
             out_text = joinpath(_args_output_dir, string(_args_out_prefix, ".GC_lambda.task_", task_id, ".txt"))
         else

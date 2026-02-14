@@ -48,7 +48,7 @@ else
     mat_mul = *
     mat_mul! = mul!
 end
-global relased_omiga_version = "1.8.8"
+global relased_omiga_version = "1.8.10"
 const to = TimerOutput()
 dir_src = @__DIR__
 include(joinpath(dir_src, "Modified_MultiResponseVarianceComponentModels/MultiResponseVarianceComponentModels.jl"))
@@ -159,6 +159,7 @@ function real_main(ARGS)::Cint
         global _args_exclude_pheno = parsed_args["exclude-pheno"]
         global _args_exclude_pheno_name = parsed_args["exclude-pheno-name"]
         global _args_dpars = parsed_args["dpars"] 
+        global _args_enable_lrt = parsed_args["enable-lrt"]
         global _args_h2_model = parsed_args["h2-model"] 
         global _args_h2_algo = parsed_args["h2-algo"] 
         global _args_export_rand_eff = parsed_args["export-random-eff"]

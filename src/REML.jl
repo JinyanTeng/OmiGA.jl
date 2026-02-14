@@ -127,9 +127,9 @@ function reml(VCM_Arr::Vector{Matrix{T}}, y::Vector{T}, X::Matrix{T}, Vi_X::Matr
             :Σe => varcmp[_n_cmp],
             :Σe_se => nothing,
             :Σp => Vp,
-            :Σp_se => VarVp,
+            :Σp_se => sqrt_nan(VarVp),
             :h2 => Hsq,
-            :h2_se => VarHsq,
+            :h2_se => sqrt_nan.(VarHsq),
             :logL => lgL,
             :logL0 => nothing,
             :n => _n,
@@ -188,9 +188,9 @@ function reml(VCM_Arr::Vector{Matrix{T}}, y::Vector{T}, X::Matrix{T}; pred_rand_
             :Σe => varcmp[_n_cmp],
             :Σe_se => nothing,
             :Σp => Vp,
-            :Σp_se => VarVp,
+            :Σp_se => sqrt_nan(VarVp),
             :h2 => Hsq,
-            :h2_se => VarHsq,
+            :h2_se => sqrt_nan.(VarHsq),
             :logL => lgL,
             :logL0 => nothing,
             :n => _n,
@@ -947,7 +947,7 @@ function getMRVCModel(multi_KSs::Vector{Matrix{T}}, Y::Vector{T}; X::Union{Nothi
         h2s, ses, Σs, Σses = MultiResponseVarianceComponentModels.h2(vcmodel)
         logl = vcmodel.logl
         B = vec(vcmodel.B)
-        Bse = vec(sqrt.(diag(vcmodel.Bcov)))
+        Bse = vec(sqrt_nan.(diag(vcmodel.Bcov)))
     catch e
         println(string("[SKIP] ", e))
     end

@@ -1,3 +1,14 @@
+function sqrt_nan(x) 
+    if any(x .< 0)
+        if x isa AbstractArray
+            return sqrt(fill(NaN, size(x)))
+        else
+            return NaN
+        end
+    else
+        return sqrt(x)
+    end
+end
 function read_qtl_pairs_file(fn::String)
     if endswith(fn, r".txt|.txt.gz")
         return CSV.File(fn) |> DataFrame

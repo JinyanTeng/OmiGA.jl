@@ -346,12 +346,12 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
                 _df_hers.ve[i] = glo_Σ_i[glo_n_cmp]
                 _df_hers.h2_g1[i] = glo_h2[1]
                 _df_hers.h2se_g1[i] = glo_h2_se[1]
-                _df_hers.h2p_g1[i] = ccdf(Chisq(1), (glo_h2[1] / glo_h2_se[1])^2) / 2
+                _df_hers.h2p_g1[i] = 0.5 * ccdf(Chisq(1), (glo_h2[1] / glo_h2_se[1])^2)
                 if glo_n_cmp == 3
                     _df_hers.vg2[i] = glo_Σ_i[2]
                     _df_hers.h2_g2[i] = glo_h2[2]
                     _df_hers.h2se_g2[i] = glo_h2_se[2]
-                    _df_hers.h2p_g2[i] = ccdf(Chisq(1), (glo_h2[2] / glo_h2_se[2])^2) / 2
+                    _df_hers.h2p_g2[i] = 0.5 * ccdf(Chisq(1), (glo_h2[2] / glo_h2_se[2])^2)
                 end
                 if h2_algo in ["em_aireml", "idul_aireml", "minmax"]
                     _df_hers.converged[i] = glo_vc[:converged]
@@ -394,7 +394,8 @@ function runOmiGA_her(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR; _
                                 @notimeit to cis_vc = reml([cis_KSs[1], LRA_factors.M, cis_KSs[3]], exppheno, X_MME, _Vi_X, _Xt_Vi_X_i, cis_Hi, _Py, _P, _PA, _Vi, _cVi, _Di, _EAvec_Di, _EAvec; pred_rand_eff=_args_export_rand_eff, reml_max_iter=_args_reml_max_iter, EA=_struct_KIN.EA, LRA_factors=LRA_factors, convergence_parameters=convergence_parameters, convergence_dlogL=convergence_dlogL)
                                 approx_ranki = LRA_factors.rank
                             else
-                                @notimeit to cis_vc = reml(cis_KSs, exppheno, X_MME, _Vi_X, _Xt_Vi_X_i, cis_Hi, _Py, _P, _PA, _Vi, _cVi, _Di, _EAvec_Di, _EAvec; pred_rand_eff=_args_export_rand_eff, reml_max_iter=_args_reml_max_iter, convergence_parameters=convergence_parameters, convergence_dlogL=convergence_dlogL)
+                                @notimeit to cis_vc = reml(cis_KSs, exppheno, X_MME, _Vi_X, _Xt_Vi_X_i, cis_Hi, _Py, _P, _PA, _Vi, _cVi, _Di, _EAvec_Di, _EAvec; 
+                                pred_rand_eff=_args_export_rand_eff, reml_max_iter=_args_reml_max_iter, convergence_parameters=convergence_parameters, convergence_dlogL=convergence_dlogL)
                             end
                         elseif cis_h2_algo == "minmax"
                             cis_vc = getMRVCModel(cis_KSs, exppheno; X=X_MME, maxiter=_args_mm_max_iter, verbose=_args_verbose)

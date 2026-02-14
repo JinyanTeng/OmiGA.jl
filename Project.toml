@@ -1,7 +1,7 @@
 name = "OmiGA"
 uuid = "9efe7ce9-a5a0-4d8a-b66b-2f28d1cb6394"
 authors = ["Jinyan Teng <kingyan312@live.cn>"]
-version = "1.8.8"
+version = "1.8.10"
 
 [deps]
 LowRankApprox = "898213cb-b102-5a47-900c-97e73b919f73"
@@ -20,9 +20,9 @@ DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 Requires = "ae029012-a4dd-5104-9daa-d747884805df"
 TranscodingStreams = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 CodecXz = "ba30903b-d9e8-5048-a5ec-d1f5b0d4b47b"
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
-Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 StatsModels = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 PooledArrays = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"

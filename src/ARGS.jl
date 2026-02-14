@@ -248,6 +248,9 @@ function get_parsed_args(args)
             help = "converge parameter of AIREML"
             arg_type = Float64
             default = 1e-6
+        "--enable-lrt"
+            help = "enable LRT for heritability"
+            action = :store_true
         "--h2-model"
             help = "statistical model for heritability estimation"
             arg_type = String

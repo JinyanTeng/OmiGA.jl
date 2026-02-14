@@ -124,7 +124,7 @@ function get_bkg_maf_ld_match!(bkg_perm_df::DataFrame, unique_mafs::Vector{Float
     bkg_perm_df .= bkg_data_sorted[sort(selected_indices), 1:4]
 end
 function read_annot_bed(annot_file_list::String)
-    chromatin_category_data = CSV.read(annot_file_list, DataFrame, header = false)
+    chromatin_category_data = CSV.read(annot_file_list, DataFrame, header = false, types=Dict(1 => String))
     rename!(chromatin_category_data, 1 => :chr, 2 => :start, 3 => :end, 4 => :category)
     chromatin_category_data.chr .= replace.(chromatin_category_data.chr, r"^chr"=>"")
     chromatin_category_data.start .+= 1 
