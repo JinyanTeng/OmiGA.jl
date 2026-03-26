@@ -260,6 +260,9 @@ function get_parsed_args(args)
         "--export-random-eff"
             help = "export the esimates of random effects"
             action = :store_true
+        "--export-bgset"
+            help = "export the background set of enrichment analysis"
+            action = :store_true
         "--qtl-map-algo"
             help = "algorithm for QTL mapping"
             arg_type = String

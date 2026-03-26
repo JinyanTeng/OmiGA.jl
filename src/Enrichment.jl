@@ -161,6 +161,10 @@ function enrichment_permutation(
     n_rows_target = size(target_data, 1)
     random_result_permutation = Vector{DataFrame}(undef, n_perms)
     thread_local_storage = [(DataFrame([Vector{eltype(col)}(undef, n_rows_target) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))) for _ in 1:nthreads()]
+    if _args_export_bgset
+        bkg_set_df = DataFrame([Vector{eltype(col)}(undef, n_rows_target * n_perms) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))
+        bkg_set_df.perm_i .= repeat(1:n_perms,inner=n_rows_target)
+    end
     block_size = ceil(Int, n_perms / nthreads())
     iter_collects = collect(Iterators.partition(1:n_perms, block_size))
     @threads for blocki in eachindex(iter_collects) 
@@ -181,6 +185,7 @@ function enrichment_permutation(
                     bkg_perm_df.end .= bkg_perm_df.end .+ target_data.len .- 1
                 end
             end
+            @runif _args_export_bgset bkg_set_df[bkg_set_df.perm_i .== ra,1:end-1] .= bkg_perm_df
             bkg_IC = getIntervalCollection(bkg_perm_df)
             bkg_overlap_results = DataFrame()
             for i in eachindex(annot_file_list)
@@ -193,6 +198,10 @@ function enrichment_permutation(
             random_result_permutation[ra] = bkg_overlap_results
             println_to_file("    Permutated $(ra)/$(n_perms).", log_file)
         end
+    end
+    if _args_export_bgset
+        bkg_set_df.start .-= 1
+        CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".bgset.bed.gz")), bkg_set_df, delim="\t",compress=true)
     end
     return random_result_permutation
 end

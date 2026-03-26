@@ -48,7 +48,7 @@ else
     mat_mul = *
     mat_mul! = mul!
 end
-global relased_omiga_version = "1.8.10"
+global relased_omiga_version = "1.8.12"
 const to = TimerOutput()
 dir_src = @__DIR__
 include(joinpath(dir_src, "Modified_MultiResponseVarianceComponentModels/MultiResponseVarianceComponentModels.jl"))
@@ -204,6 +204,7 @@ function real_main(ARGS)::Cint
         global _args_ldscore_file = parsed_args["ldscore-file"]
         global _args_enrich_target = parsed_args["enrich-target"]
         global _args_enrich_annot = parsed_args["enrich-annot"]
+        global _args_export_bgset = parsed_args["export-bgset"]
         global _args_gpu = parsed_args["gpu"]
         global _args_chunk_size = parsed_args["chunk-size"]
         global _args_use_gzip = parsed_args["use-gzip"]

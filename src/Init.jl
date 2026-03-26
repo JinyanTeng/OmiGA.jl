@@ -699,7 +699,7 @@ function InteractionTerm(interaction_file::Union{Nothing,String}=nothing, id_map
             ITERM = ITERM[order_row_index, :]
         end
         if _args_normalized_interaction
-            ITERM .= inverse_normal_transform(ITERM) |> Matrix{FloatT}
+            ITERM .= inverse_normal_transform(ITERM) |> Array{FloatT}
         end
         var_INT = [var(ITERM[:, x]) for x in axes(ITERM, 2)]
         if any(var_INT == 0)
