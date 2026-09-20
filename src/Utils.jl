@@ -569,6 +569,10 @@ function print_to_file(message::String, filename::String)
         flush(file)
     end
 end
+function error_to_log(message::String, log_file::String)
+    println_to_file(string("[ERROR] ", message), log_file)
+    error(message)
+end
 function format_milliseconds(milliseconds::Millisecond)
     total_seconds = milliseconds.value ÷ 1000
     hours = total_seconds ÷ 3600

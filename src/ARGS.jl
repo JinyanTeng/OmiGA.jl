@@ -138,6 +138,9 @@ function get_parsed_args(args)
         "--enrich-target"
             help = "bed file(s) of target set used for enrichment analysis"
             arg_type = String
+        "--chrom-sizes"
+            help = "two-column tab-separated text file containing assembly sequence names and sizes"
+            arg_type = String
         "--enrich-annot"
             help = "bed file(s) of annotation used for enrichment analysis"
             nargs = '*'
@@ -429,6 +432,9 @@ function get_parsed_args(args)
         "--experimental"
             help = "enable experimental functions"
             action = :store_true
+        "--tmpdir"
+            help = "temporary directory for intermediate files"
+            arg_type = String
     end
     parsed_args = parse_args(args, settings)
     return parsed_args

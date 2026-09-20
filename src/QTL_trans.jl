@@ -45,17 +45,19 @@ function runOmiGA_trans(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR,
             continue
         end
         idx_beta_g1 = nonzero_cols .∈ (1:3:size(chrom_jld, 2),)
-        idx_beta_se_g1 = nonzero_cols .∈ (2:3:size(chrom_jld, 2),)
-        idx_pval_g1 = nonzero_cols .∈ (3:3:size(chrom_jld, 2),)
         snp_index = nonzero_rows[idx_beta_g1]
         gene_index = Int.((nonzero_cols[idx_beta_g1] .- 1) ./ 3 .+ 1)
+        col_se = 3 .* (gene_index .- 1) .+ 2
+        col_pv = 3 .* (gene_index .- 1) .+ 3
+        beta_se_vals = chrom_jld[CartesianIndex.(snp_index, col_se)]
+        tstat_vals   = chrom_jld[CartesianIndex.(snp_index, col_pv)]
         _df_full = DataFrame(
             pheno_id=pheno_annotation.pheno_id[gene_index],
             variant_id=_snp_annot.variant[snp_index],
             af=_snp_annot.af[snp_index],
             beta_g1=nonzero_vals[idx_beta_g1],
-            beta_se_g1=nonzero_vals[idx_beta_se_g1], 
-            pval_g1=ccdf(WaldTest(1, _n - _X_c - 1), nonzero_vals[idx_pval_g1])
+            beta_se_g1=beta_se_vals,
+            pval_g1=ccdf(WaldTest(1, _n - _X_c - 1), tstat_vals)
         )
         cols_float = [_df_full[1, x] isa AbstractFloat for x in range(1, ncol(_df_full))]
         _df_full[:, cols_float] = round.(_df_full[:, cols_float], sigdigits=6)

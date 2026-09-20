@@ -243,10 +243,10 @@ function Phenotype(phenotype_bed_file::String; rm_pheno_threshold::T=0.1, chrom:
         annotation = annotation[keep_index, :]
         n_samples_e, n_phenotypes = size(phenotype)
         if n_phenotypes == 0
-            @error "No phenotype was available for analysis as all phenotypes were eliminated by '--rm-pheno-threshold'. Please check the phenotype data!"
+            error_to_log("No phenotype was available for analysis as all phenotypes were eliminated by '--rm-pheno-threshold'. Please check the phenotype data!", log_file)
         end
     end
-    @runif check_chr_order(annotation.chrom) @error "The phenotype data is in unordered! Please sort it by chromosome and position."
+    @runif check_chr_order(annotation.chrom) error_to_log("The phenotype data is in unordered! Please sort it by chromosome and position.", log_file)
     chroms = string.(unique(annotation.chrom))
     @runif USE_Float32 df_to_32bit!(annotation)
     @runif !isnothing(id_map) rematch_sample_id!(iid, id_map)
@@ -369,7 +369,7 @@ function Phenotype(phenotype_file::String, pheno_annot_file::Union{String,Nothin
         annotation = annotation[keep_index, :]
         n_samples_e, n_phenotypes = size(phenotype)
     end
-    @runif check_chr_order(annotation.chrom) @error "The phenotype data is in unordered! Please sort it by chromosome and position."
+    @runif check_chr_order(annotation.chrom) error_to_log("The phenotype data is in unordered! Please sort it by chromosome and position.", log_file)
     chroms = string.(unique(annotation.chrom))
     @runif USE_Float32 df_to_32bit!(annotation)
     @runif !isnothing(id_map) rematch_sample_id!(iid, id_map)
@@ -441,7 +441,7 @@ function Phenotype_annot(pheno_annot_file::String; chrom::Vector{String}=String[
         exclude_index = .!(annotation.pheno_id .∈ (extract_pheno_list,))
         annotation = annotation[exclude_index, :]
     end
-    @runif check_chr_order(annotation.chrom) @error "The phenotype data is in unordered! Please sort it by chromosome and position."
+    @runif check_chr_order(annotation.chrom) error_to_log("The phenotype data is in unordered! Please sort it by chromosome and position.", log_file)
     chroms = string.(unique(annotation.chrom))
     n_phenotypes = size(annotation, 1)
     @runif USE_Float32 df_to_32bit!(annotation)

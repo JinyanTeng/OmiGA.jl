@@ -263,8 +263,8 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
         for ch in chroms
             ch_snp_annotation = snp_annotation[snp_annotation.chromosome.==ch, :]
             ch_pheno_annotation = pheno_annotation[pheno_annotation.chrom.==ch, :]
-            ch_pheno_annotation.start .= ch_pheno_annotation.start .- 1_000_000
-            ch_pheno_annotation.end .= ch_pheno_annotation.end .+ 1_000_000 .- 1
+            ch_pheno_annotation.start .= ch_pheno_annotation.start .- _args_cis_window
+            ch_pheno_annotation.end .= ch_pheno_annotation.end .+ _args_cis_window .- 1
             ranges = [ch_pheno_annotation.start[x]:ch_pheno_annotation.end[x] for x in 1:size(ch_pheno_annotation, 1)]
             result = range_vector_intersection_set(ranges, ch_snp_annotation.position)
             pheno_annotation.kept[pheno_annotation.chrom.==ch] .= result
@@ -286,9 +286,9 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
             ch_pheno_annotation = pheno_annotation[(pheno_annotation.chrom.==ch).&pheno_annotation.kept, :]
             ch_snp_annotation.reindex .= 1:size(ch_snp_annotation, 1)
             ch_pheno_annotation.reindex .= 1:size(ch_pheno_annotation, 1)
-            ch_pheno_annotation.start .= ch_pheno_annotation.start .- 1_000_000
+            ch_pheno_annotation.start .= ch_pheno_annotation.start .- _args_cis_window
             ch_pheno_annotation.start[(ch_pheno_annotation.start.<ch_snp_annotation.position[1])] .= ch_snp_annotation.position[1]
-            ch_pheno_annotation.end .= ch_pheno_annotation.end .+ 1_000_000 .- 1
+            ch_pheno_annotation.end .= ch_pheno_annotation.end .+ _args_cis_window .- 1
             ch_pheno_annotation.end[(ch_pheno_annotation.end.>ch_snp_annotation.position[end])] .= ch_snp_annotation.position[end]
             batch_var_start = 1
             batch_var_end = batch_var_start
@@ -336,7 +336,11 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
         mt_method=multiple_testing_method,
         dof=DOF,
         map_model=qtl_map_model,
+        window_type=_args_window_type 
     )
+    if _args_window_type == "tss"
+        println_to_file("The 'start' column is designated as the TSS for defining the cis-region for each phenotype.", log_file)
+    end
     if _args_run_mode == "cis_interaction"
         df_info.map_model .= replace(qtl_map_model, "a" => "a+ai")
     end
@@ -413,7 +417,7 @@ function runOmiGA_cis(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, _
                     beta_se_g1=NAN,
                     pval_g1=NaN,
                 )
-                @runif with_strand insertcols!(_df_tops, "start_distance", "end_distance" => 0, after=true)
+                @runif with_strand insertcols!(_df_tops_group, "start_distance", "end_distance" => 0, after=true)
             end
             chunk_genotype = Matrix{FloatT}(undef, (_n_samples, length(snp_index_chunk)))
             if !USE_GPU

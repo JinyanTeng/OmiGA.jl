@@ -49,7 +49,7 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
     n_tests = 1
     n_grms = 1
     if qtl_map_model in ["a" "a+ai" "a+ai+A"]
-        @error "The current version does not support the conditional independent analysis for results from linear model or interaction cis-QTL."
+        error_to_log("The current version does not support the conditional independent analysis for results from linear model or interaction cis-QTL.", log_file)
     end
     if qtl_map_model == "a+A"
         glo_EA = _struct_KIN.EA
@@ -76,7 +76,7 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
         glo_h2_model = "Ag"
     end
     if qtl_map_model == "a+d+A+D"
-        @error "The current version does not support the conditional independent analysis for '--qtl-map-model " * qtl_map_model * "'."
+        error_to_log("The current version does not support the conditional independent analysis for '--qtl-map-model " * qtl_map_model * "'.", log_file)
         genotype = _struct_GENO.genotype
         domGenotype = _struct_DOM.genotype
         n_tests = 2
@@ -84,7 +84,7 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
         glo_h2_model = "Ag+Dg"
     end
     if qtl_map_model == "d+A+D"
-        @error "The current version does not support the conditional independent analysis for '--qtl-map-model " * qtl_map_model * "'."
+        error_to_log("The current version does not support the conditional independent analysis for '--qtl-map-model " * qtl_map_model * "'.", log_file)
         genotype = _struct_DOM.genotype
         n_grms = 2
         glo_h2_model = "Ag+Dg"
@@ -291,7 +291,7 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
             group_pheno_ids = _gene_annot.pheno_id[_gene_annot.group_id.==gene]
             group_size = length(group_pheno_ids)
             index_tested_gene = findfirst(sig_df_tops.group_id .== gene)
-            @timeit to "Keep SNPs within cis-region" cissnps_annot, n_cis_snps = get_cis_snp_info(_gene_annot, _snp_annot, group_pheno_ids[1], _args_cis_window)
+            @timeit to "Keep SNPs within cis-region" cissnps_annot, n_cis_snps = get_cis_snp_info(_gene_annot, _snp_annot, group_pheno_ids[1], _args_cis_window; window_type=_args_window_type)
             @timeit to "Pull cis-SNP genotypes" begin
                 if is_sample_byrow
                     if qtl_map_algo == "standard"
@@ -650,7 +650,7 @@ function runOmiGA_independent(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_
             println_to_file(string("    PHENO: ", i, "/", _n_phenos, " <", gene,">"), log_file)
             index_tested_gene = findfirst(sig_df_tops.pheno_id .== gene)
             global_index_tested_gene = _gene_annot.index[findfirst(_gene_annot.pheno_id .== gene)]
-            @timeit to "Keep SNPs within cis-region" cissnps_annot, n_cis_snps = get_cis_snp_info(_gene_annot, _snp_annot, gene, _args_cis_window)
+            @timeit to "Keep SNPs within cis-region" cissnps_annot, n_cis_snps = get_cis_snp_info(_gene_annot, _snp_annot, gene, _args_cis_window; window_type=_args_window_type)
             @timeit to "Pull cis-SNP genotypes" begin
                 if is_sample_byrow
                     if qtl_map_algo == "standard"

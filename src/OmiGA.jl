@@ -41,6 +41,8 @@ using IntervalTrees
 using MKL 
 using CUDA
 using Suppressor
+using HTTP
+using JSON
 if false
     mat_mul = matmul
     mat_mul! = matmul! 
@@ -48,7 +50,7 @@ else
     mat_mul = *
     mat_mul! = mul!
 end
-global relased_omiga_version = "1.8.12"
+global relased_omiga_version = "1.8.18"
 const to = TimerOutput()
 dir_src = @__DIR__
 include(joinpath(dir_src, "Modified_MultiResponseVarianceComponentModels/MultiResponseVarianceComponentModels.jl"))
@@ -93,7 +95,8 @@ function real_main(ARGS)::Cint
     global parsed_args = get_parsed_args(MAIN_ARGS)
     str_cmd = join(MAIN_ARGS, " ")
     if parsed_args["debug"]
-        println(" * Runing OmiGA with debug mode!")
+        println("⚠️  Warning: Running in DEBUG mode. Performance will be limited.")
+        println("⚠️  For normal analysis, please restart without --debug.")
         println(parsed_args)
     end
     begin
@@ -203,6 +206,7 @@ function real_main(ARGS)::Cint
         global _args_ld_match = parsed_args["ld-match"]
         global _args_ldscore_file = parsed_args["ldscore-file"]
         global _args_enrich_target = parsed_args["enrich-target"]
+        global _args_chrom_sizes_file = parsed_args["chrom-sizes"]
         global _args_enrich_annot = parsed_args["enrich-annot"]
         global _args_export_bgset = parsed_args["export-bgset"]
         global _args_gpu = parsed_args["gpu"]
@@ -215,7 +219,14 @@ function real_main(ARGS)::Cint
         global _args_verbose = parsed_args["verbose"]
         global _args_debug = parsed_args["debug"]
         global _args_experimental = parsed_args["experimental"]
+        global _args_tmpdir = parsed_args["tmpdir"]
         @runif _args_debug ENV["JULIA_DEBUG"] = Main
+        if !isnothing(_args_tmpdir)
+            ENV["TMPDIR"] = _args_tmpdir
+            mkpath(ENV["TMPDIR"])
+            println(" * Temporary directory has been set to: $(ENV["TMPDIR"])")
+            println(" * You may delete this directory after the task is completed.")
+        end
         global _args_low_mem = (isnothing(_args_chunk_size) ? false : true) || _args_low_mem
         global getG = _args_low_mem ? getG_fast : getG_fast
         if isnothing(_args_mkl_threads)
@@ -252,8 +263,9 @@ function real_main(ARGS)::Cint
         global USE_Float32 = FloatT == Float32
         global NAN = USE_Float32 ? NaN32 : NaN
         global USE_GPU = _args_gpu
-        @runif USE_GPU begin
+        if USE_GPU
             global USE_GPU = CUDA.functional()
+            @runif USE_GPU println(" * Running OmiGA using GPU!")
         end
         if isnothing(_args_out_prefix)
             error(string("The '--prefix' option need to be specified."))
@@ -265,8 +277,20 @@ function real_main(ARGS)::Cint
     println_to_file(string("* Version: ", relased_omiga_version), log_file)
     println_to_file(string("* Help Pages: https://omiga.bio/"), log_file)
     println_to_file(string("* Please report bugs to Jinyan Teng <jinyan.teng@scau.edu.cn>"), log_file)
-    println_to_file(string("* or post a disscusion in OmiGA BBS (https://bbs.omiga.bio/)"), log_file)
+    println_to_file(string("* or Contact Us (https://omiga.bio/
     println_to_file(string("****************************************************************"), log_file)
+    try
+        http_body = HTTP.get("https://omiga.bio/releases/latest.json").body |> String
+        http_json = JSON.parse(http_body)
+        latest_version = http_json["release"]["linux"]["version"]
+        if VersionNumber(latest_version) > VersionNumber(relased_omiga_version)
+            println_to_file(string("📢 An updated version v", latest_version, " has been released."), log_file)
+            @runif Sys.islinux() println_to_file(
+                string("📢 For a better experience, it is recommended to use `omiga --update` to install the latest version."),
+                log_file)
+        end
+    catch
+    end
     println_to_file("", log_file)
     println_to_file("Command Line Input:", log_file)
     println_to_file(replace(replace(str_cmd, " --" => " \\\n--"), "--" => "  --"), log_file) 
@@ -304,7 +328,7 @@ function real_main(ARGS)::Cint
     elseif _args_run_mode == "xbirg"
         runOmiGA_xbirg(_struct_PHENO, _struct_PHENO_2, _struct_KIN, _struct_COVAR, _struct_COVAR_2)
     elseif _args_run_mode == "enrich"
-        runOmiGA_enrich(_args_enrich_target, _args_enrich_annot; bkg_plink_prefix=_args_geno_file_prefix, ldscore_file=_args_ldscore_file, maf_match=_args_maf_match, ld_match=_args_ld_match, threshold=nothing, n_perms=_args_n_perms)
+        runOmiGA_enrich(_args_enrich_target, _args_enrich_annot; bkg_plink_prefix=_args_geno_file_prefix, ldscore_file=_args_ldscore_file, chrom_sizes_file=_args_chrom_sizes_file, maf_match=_args_maf_match, ld_match=_args_ld_match, threshold=nothing, n_perms=_args_n_perms)
     end
     time_end_omiga = now()
     println_to_file(string("Program end at: ", time_end_omiga), log_file)

@@ -9,7 +9,17 @@ function getIntervalCollection(fs::String)
     annotbed = CSV.File(fs, delim="\t", header=0) |> DataFrame
     getIntervalCollection(annotbed)
 end
-function getInterval(A::GenomicIntervalCollection, B::GenomicIntervalCollection; only_meta::Union{Nothing,Vector{String}}=nothing)
+function getInterval(A::GenomicIntervalCollection, B::GenomicIntervalCollection; only_meta::Union{Nothing,Vector{String}}=nothing, unique_meta::Union{Nothing,Vector{String}}=nothing, omit_pos::Bool=false) 
+    unique_A = false
+    unique_B = false
+    if !isnothing(unique_meta)
+        if "A" in unique_meta
+            unique_A = true
+        end
+        if "B" in unique_meta
+            unique_B = true
+        end
+    end
     j = 0
     for i in eachoverlap(A, B)
         j+=1
@@ -21,22 +31,66 @@ function getInterval(A::GenomicIntervalCollection, B::GenomicIntervalCollection;
             j+=1
             df[j,:] .= (i[1].groupname, i[1].first, i[1].last, i[1].metadata, i[2].groupname, i[2].first, i[2].last, i[2].metadata)
         end
+        if unique_A && unique_B
+            if omit_pos
+                unique!(df, [4, 8])
+            else
+                unique!(df)
+            end
+        else
+            if unique_A
+                if omit_pos
+                    unique!(df,4)
+                else
+                    unique!(df,1:4)
+                end
+            end
+            if unique_B
+                if omit_pos
+                    unique!(df,8)
+                else
+                    unique!(df,5:8)
+                end
+            end
+        end
     else
         df = DataFrame()
-        if "A" in only_meta
+        if "A" in only_meta || unique_A
             df.metadata_A = repeat([""],j)
         end
-        if "B" in only_meta
+        if "B" in only_meta || unique_B
             df.metadata_B = repeat([""],j)
         end
         j = 0
         for i in eachoverlap(A, B)
             j+=1
-            if "A" in only_meta
+            if "A" in only_meta || unique_A
                 df.metadata_A[j] = i[1].metadata
             end
-            if "B" in only_meta
+            if "B" in only_meta || unique_B
                 df.metadata_B[j] = i[2].metadata
+            end
+        end
+        if unique_A && unique_B
+            unique!(df)
+            if !("A" in only_meta)
+                select!(df,Not(:metadata_A))
+            end
+            if !("B" in only_meta)
+                select!(df,Not(:metadata_B))
+            end
+        else
+            if unique_A
+                unique!(df,:metadata_A)
+                if !("A" in only_meta)
+                    select!(df,Not(:metadata_A))
+                end
+            end
+            if unique_B
+                unique!(df,:metadata_B)
+                if !("B" in only_meta)
+                    select!(df,Not(:metadata_B))
+                end
             end
         end
     end
@@ -123,12 +177,15 @@ function get_bkg_maf_ld_match!(bkg_perm_df::DataFrame, unique_mafs::Vector{Float
     end
     bkg_perm_df .= bkg_data_sorted[sort(selected_indices), 1:4]
 end
-function read_annot_bed(annot_file_list::String)
+function read_annot_bed(annot_file_list::String) 
     chromatin_category_data = CSV.read(annot_file_list, DataFrame, header = false, types=Dict(1 => String))
     rename!(chromatin_category_data, 1 => :chr, 2 => :start, 3 => :end, 4 => :category)
     chromatin_category_data.chr .= replace.(chromatin_category_data.chr, r"^chr"=>"")
     chromatin_category_data.start .+= 1 
     return chromatin_category_data
+end
+function get_chr_bin(range_ends::Vector, i::Int)
+    return searchsortedfirst(range_ends, i) 
 end
 function enrichment_permutation(
     n_perms::Int64, 
@@ -159,10 +216,19 @@ function enrichment_permutation(
         end
     end
     n_rows_target = size(target_data, 1)
+    use_chrom_sizes = !isnothing(_args_chrom_sizes_file)
     random_result_permutation = Vector{DataFrame}(undef, n_perms)
-    thread_local_storage = [(DataFrame([Vector{eltype(col)}(undef, n_rows_target) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))) for _ in 1:nthreads()]
+    if !use_chrom_sizes
+        thread_local_storage = [(DataFrame([Vector{eltype(col)}(undef, n_rows_target) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))) for _ in 1:nthreads()] 
+    else
+        thread_local_storage = [(DataFrame([Vector{elt}(undef, n_rows_target) for elt in [String,Int,Int,String]], ["chr","start","end","feature"])) for _ in 1:nthreads()] 
+    end
     if _args_export_bgset
-        bkg_set_df = DataFrame([Vector{eltype(col)}(undef, n_rows_target * n_perms) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))
+        if !use_chrom_sizes
+            bkg_set_df = DataFrame([Vector{eltype(col)}(undef, n_rows_target * n_perms) for col in eachcol(bkg_data[:,1:4])], names(bkg_data[:,1:4]))
+        else
+            bkg_set_df = DataFrame([Vector{elt}(undef, n_rows_target * n_perms) for elt in [String, Int, Int, String]], ["chr", "start", "end", "feature"])
+        end
         bkg_set_df.perm_i .= repeat(1:n_perms,inner=n_rows_target)
     end
     block_size = ceil(Int, n_perms / nthreads())
@@ -179,17 +245,28 @@ function enrichment_permutation(
                 end
             else
                 rng = Random.MersenneTwister(ra) 
-                random_idx = rand(rng, 1:size(bkg_data, 1), n_rows_target)
-                bkg_perm_df .= bkg_data[random_idx, 1:4]
-                if use_region
-                    bkg_perm_df.end .= bkg_perm_df.end .+ target_data.len .- 1
+                if use_chrom_sizes
+                    random_idx = rand(rng, 1:bkg_data.range_end[end], n_rows_target)
+                    bkg_perm_df.start .= [get_chr_bin(bkg_data.range_end, i) for i in random_idx]
+                    bkg_perm_df.chr .= bkg_data.chr[bkg_perm_df.start]
+                    bkg_perm_df.start .= random_idx .- bkg_data.range_start[bkg_perm_df.start] .+ 1
+                    if use_region 
+                        bkg_perm_df.end .= bkg_perm_df.start .+ target_data.len .- 1 
+                    else
+                        bkg_perm_df.end .= bkg_perm_df.start
+                    end
+                    bkg_perm_df.feature .= string.(bkg_perm_df.chr, "_", bkg_perm_df.start, "_", bkg_perm_df.end)
+                else
+                    random_idx = rand(rng, 1:size(bkg_data, 1), n_rows_target)
+                    bkg_perm_df .= bkg_data[random_idx, 1:4] 
+                    @runif use_region bkg_perm_df.end .= bkg_perm_df.end .+ target_data.len .- 1 
                 end
             end
             @runif _args_export_bgset bkg_set_df[bkg_set_df.perm_i .== ra,1:end-1] .= bkg_perm_df
             bkg_IC = getIntervalCollection(bkg_perm_df)
             bkg_overlap_results = DataFrame()
             for i in eachindex(annot_file_list)
-                overlap_res = getInterval(bkg_IC, annotation_IC[i]; only_meta=["B"])
+                overlap_res = getInterval(bkg_IC, annotation_IC[i]; only_meta=["B"], unique_meta=["A", "B"])
                 overlap_res.bed_file .= basename(annot_file_list[i])
                 append!(bkg_overlap_results, overlap_res)
             end
@@ -201,6 +278,7 @@ function enrichment_permutation(
     end
     if _args_export_bgset
         bkg_set_df.start .-= 1
+        rename!(bkg_set_df, "chr" => "
         CSV.write(joinpath(_args_output_dir, string(_args_out_prefix, ".bgset.bed.gz")), bkg_set_df, delim="\t",compress=true)
     end
     return random_result_permutation
@@ -231,6 +309,7 @@ function runOmiGA_enrich(
     annot_file_list::Union{Tuple{String}, Vector{String}};
     bkg_plink_prefix::Union{Nothing, String}=nothing,
     ldscore_file::Union{Nothing, String}=nothing,
+    chrom_sizes_file::Union{Nothing, String}=nothing,
     maf_match::Union{Nothing, Float64}=nothing,
     ld_match::Union{Nothing, Float64}=nothing,
     threshold::Union{Nothing, Float64}=nothing,
@@ -239,8 +318,8 @@ function runOmiGA_enrich(
     println_to_file("Loading and dealing with target dataset...", log_file)
     use_region = false
     target_file_format = "bed"
-    @timeit to "Load target" if endswith(target_file, r"bed|bed.gz")
-        target_data = CSV.read(target_file, DataFrame, header = false, buffer_in_memory=true)
+    @timeit to "Load target" if endswith(target_file, r"bed|bed.gz") 
+        target_data = CSV.read(target_file, DataFrame, header = false, buffer_in_memory=true, types=Dict(1 => String))
         target_data[:,1] .= replace.(target_data[:,1],r"^chr"=>"")
         target_data[:,2] .+= 1 
         target_data.len .= target_data[:,3] .- target_data[:,2] .+ 1
@@ -256,18 +335,36 @@ function runOmiGA_enrich(
     begin
         println_to_file("Loading and dealing with background dataset...", log_file)
         bkg_data = DataFrame()
-        @timeit to "Load bkg" if isnothing(ldscore_file) 
-            bkg_data = read_bkg_bim(bkg_plink_prefix)
-        else
+        @timeit to "Load bkg" if !isnothing(ldscore_file)
             df_ldscore = CSV.File(ldscore_file, types=Dict(1 => String, 2 => String)) |> DataFrame
             bkg_data = DataFrame(:chr => df_ldscore.chr, :start => df_ldscore.bp, :end => df_ldscore.bp, :variant_id => df_ldscore.SNP, :maf => df_ldscore.MAF, :ldscore => df_ldscore.ldscore)
             println_to_file("[INFO] LD score file loaded, and the 'ldscore' column will be used for LD-match analysis.", log_file)
+        else
+            if !isnothing(bkg_plink_prefix)
+                bkg_data = read_bkg_bim(bkg_plink_prefix)
+            elseif !isnothing(chrom_sizes_file)
+                use_region = true
+                bkg_data = CSV.File(chrom_sizes_file, types=Dict(1 => String, 2 => Int), header=false) |> DataFrame  
+                rename!(bkg_data, ["chr","length"])
+                bkg_data.chr .= replace.(bkg_data.chr,r"^chr"=>"")
+                bkg_data.range_start .= 0
+                bkg_data.range_end .= accumulate(+, bkg_data.length)
+                bkg_data.range_start .= bkg_data.range_end .- bkg_data.length .+ 1
+            else
+                error_to_log("Please provide correct background file!", log_file)
+            end
         end
         if target_file_format == "omiga"
             target_data = add_chr_pos_to_cis_tops(target_data, bkg_data)
             target_data[:,1] .= replace.(target_data[:,1],r"^chr"=>"")
         end
+        n_rows_target0 = size(target_data, 1)
+        target_data = unique!(target_data)
         n_rows_target = size(target_data, 1)
+        if n_rows_target0 != n_rows_target
+            println_to_file(string(" * Remove ", n_rows_target0 - n_rows_target," duplicate rows (with the same coordinates and name) for target data."),log_file)
+        end
+        println_to_file(string(" * ", n_rows_target, " non-redundant features in target data used for analysis."), log_file)
         target_data_IC = getIntervalCollection(target_data)
     end
     begin
@@ -281,7 +378,7 @@ function runOmiGA_enrich(
     target_overlap_result = DataFrame()
     for i in eachindex(annot_file_list)
         chromatin_category_data = annotation_IC[i]
-        target_overlap_result_1 = getInterval(target_data_IC, chromatin_category_data)
+        target_overlap_result_1 = getInterval(target_data_IC, chromatin_category_data; unique_meta=["A", "B"], omit_pos=true) 
         target_overlap_result_1.bed_file .= basename(annot_file_list[i])
         target_overlap_result = vcat(target_overlap_result, target_overlap_result_1)
     end

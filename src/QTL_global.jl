@@ -239,7 +239,7 @@ function runOmiGA_gwas(_struct_PHENO, _struct_GENO, _struct_KIN, _struct_COVAR, 
                             df_test_omit_rows = view(_df_test, :, current_df_cols)[:, 3] .< tstat_threshold
                             fill!(view(_df_test, df_test_omit_rows, current_df_cols), 0)
                         elseif tstat_threshold == 0 && !is_write_text 
-                            df_test_omit_rows = iszero.(view(_df_test, :, current_df_cols)[:, 3])
+                            df_test_omit_rows = iszero.(view(_df_test, :, current_df_cols)[:, 1])
                             fill!(view(_df_test, df_test_omit_rows, current_df_cols), 0)
                         end
                         if !isnothing(exclude_window) && chrom == _gene_annot.chrom[i]
